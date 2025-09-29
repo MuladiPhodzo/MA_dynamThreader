@@ -2,15 +2,20 @@ from dotenv import load_dotenv
 import os, threading, asyncio
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram import Update
-import requests
+import requests, sys
 
 class TelegramMessenger:
     def __init__(self, chat_id=None):
-        load_dotenv()  # Load environment variables from .env file
+        
+        base_dir = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+        env_path = os.path.join(base_dir, '.env')
+
+        load_dotenv(dotenv_path=env_path)  # ✅ Explicit path
+        
         self.BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")  # 🛠️ Use environment variable or provided token
         if not self.BOT_TOKEN:
             raise ValueError("❌ TELEGRAM_BOT_TOKEN not found in .env file")
-
+           
         self.chat_id = chat_id
         self.should_run = True  # 🔁 Flag to control bot execution
         

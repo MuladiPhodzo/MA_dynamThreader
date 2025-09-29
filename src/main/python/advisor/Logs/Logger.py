@@ -4,9 +4,15 @@ import os
 from datetime import datetime
 
 class FileLogger:
-    def __init__(self, user_data, filename="src/main/python/advisor/Logs/logs.csv"):
+    def __init__(self, user_data, filename=None):
         self.user_data = user_data
-        self.filename = filename
+
+        # Dynamically resolve the user's Documents folder
+        documents_dir = os.path.join(os.path.expanduser("~"), "Documents")
+        logs_dir = os.path.join(documents_dir, "TradingBotLogs")
+        os.makedirs(logs_dir, exist_ok=True)
+
+        self.filename = filename or os.path.join(logs_dir, "logs.csv")
         self._init_file()
         
         # Redirect print() to this logger
@@ -28,7 +34,7 @@ class FileLogger:
             return
 
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        account_info = f"{timestamp}: {self.user_data.get('server')}-{self.user_data.get('account_id')}"
+        account_info = f"{timestamp} »»» {self.user_data.get('server')}-{self.user_data.get('account_id')}"
         log_entry = f": {message}"
 
         with open(self.filename, mode='a', newline='', encoding='utf-8') as f:

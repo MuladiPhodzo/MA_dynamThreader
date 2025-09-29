@@ -4,7 +4,7 @@ import datetime as dt
 from advisor.Telegram import Messanger
 
 class MT5TradingAlgorithm:
-    def __init__(self, symbol, telegram: Messanger.TelegramMessenger, lot_size=0.1, magic_number=1000):
+    def __init__(self, symbol, telegram: Messanger.TelegramMessenger, user_data, magic_number=1000):
         """
         Initialize the MT5 trading algorithm.
         :param symbol: The trading symbol (e.g., 'USDJPY').
@@ -13,8 +13,9 @@ class MT5TradingAlgorithm:
         """
         self.TradesData = None
         self.symbol = symbol
-        self.lot_size = lot_size
+        self.lot_size = user_data['volume']
         self.magic_number = magic_number
+        self.user_data = user_data
         self.current_position = None  # Track 'buy', 'sell', or None
         self.telegram = telegram
 
@@ -98,12 +99,12 @@ class MT5TradingAlgorithm:
 
             if market_bias == "Bullish" and ltf_Bias == 'Buy' and current_price > ltf_latest['Fast_MA']:
                 print(f"{symbol} - Confirmed Bullish Signal - Placing BUY order")
-                result = self.place_order("buy")
+                result = self.place_order("buy", stop_loss=self.user_data['sl'], take_profit=self.user_data['tp'])
                 self.TradesData = ltf_latest
 
             elif market_bias == "Bearish" and ltf_Bias == 'Sell' and current_price < ltf_latest['Fast_MA']:
                 print(f"{symbol} - Confirmed Bearish Signal - Placing SELL order")
-                result = self.place_order("sell")
+                result = self.place_order("sell", stop_loss=self.user_data['sl'], take_profit=self.user_data['tp'])
                 self.TradesData = ltf_latest
 
             print(f"{symbol} - No action taken within range." if result is None else f"{symbol} - Action taken: {result}")

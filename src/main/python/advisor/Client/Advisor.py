@@ -31,9 +31,11 @@ class MetaTrader5Client:
         res = self.initialize(user_data)
         
         if not res[0]:
-            print("Connection failed, error code =", mt5.last_error())
+            messagebox.showerror("Connection failed", f"Failed to log in with error code ={ mt5.last_error()}")
+            print(f"failed to log in with error code ={ mt5.last_error()}")
             mt5.shutdown()
             return False
+        messagebox.showinfo("Login successful", "Connecting to MetaTrader 5....")
         print(f"✅ Successfully connected to MT5 account {user_data['account_id']} on server '{user_data['server']}'")
         return res
 
@@ -53,10 +55,8 @@ class MetaTrader5Client:
                     mt5.shutdown()
                     return False
 
-        finally:
-            messagebox.showerror("Login successful", "Connecting to MetaTrader 5....")        
+        finally:        
             print("🚀 Bot is ready to start trading!")
-            
             self.account_info = mt5.account_info()
             self.terminal_info = mt5.terminal_info()
             
@@ -238,75 +238,3 @@ class DataPlotter:
         plt.legend(loc='upper left')
         plt.show()
 
-# if __name__ == "__main__":
-# 	# Initialize client and symbols
-# 	symbols = ["USDJPY", "USDCHF", "USDCAD", "USDZAR", "EURUSD"]
-# 	Now = datetime.now()
-
-# 	plotter = DataPlotter()
-# 	client = MetaTrader5Client(symbols)
-# 	client.TF = {
-#    "HTF": mt5.TIMEFRAME_H4,
-#    "LTF" :mt5.TIMEFRAME_H1}
-
-# 	THRESHOLD = 0.0005
-
-# 	if not client.initialize():
-# 		exit()
-# 	"""
-# 	print("ACCOUNT.info: ", client.account_info)
-# 	print("terminal.info: ", client.terminal_info)
-# 	 """
-
-# 	if not client.check_symbols_availability():
-# 		client.shutdown()
-# 		exit()
-
-# 		# for symbol in symbols:
-
-# 		# 	print(f"Fetching {symbol} rates...")
-# 		# 	filepath = f'src/main/python/Logs/Rates/{symbol}_rates'
-# 		# 	rangedRates = client.get_rates_range(symbol, client.TF, datetime(2024, 8, 1, 00), Now)
-# 		# 	client.Ratesdata = pd.DataFrame(rangedRates)
-# 		# 	strategy = MA.MovingAverageCrossover(symbol, data=client.Ratesdata, fast_period=50, slow_period=100)
-# 		# 	data = strategy.run_moving_average_strategy(symbol, client.TF, datetime(2024, 11, 28, 13), 1000)
-
-
-# 		# 	data = client.get_multi_tf_data(symbol, client.TF)
-# 		# 	if data is None:
-# 		# 		client.shutdown()
-
-# 		# 	htf_data = data["HTF"]
-# 		# 	ltf_data = data["LTF"]
-# 		# 	trade = Algo.MT5TradingAlgorithm(rates_data, symbol,)
-
-
-
-# 		# 	HTF_MovingAverage = MA.MovingAverageCrossover(symbol, htf_data)
-# 		# 	LTF_MovingAverage = MA.MovingAverageCrossover(symbol, ltf_data)
-# 		# 	HTF_data = HTF_MovingAverage.calculate_moving_averages()
-# 		# 	LTF_data = LTF_MovingAverage.calculate_moving_averages()
-
-# 		# 	latest = data.iloc[-1]
-# 		# 	current_price = latest['close']
-
-# 		# 	client.Ratesdata = data
-# 		# 	print(client.Ratesdata)
-
-# 		# 	plotter.plot_charts(
-# 		# 			client.Ratesdata,
-# 		# 			client.Ratesdata['close'].rolling(window=50).mean(),
-# 		# 			client.Ratesdata['close'].rolling(window=100).mean())
-
-# 		# 	# Check if the price is within the threshold of moving averages
-# 		# 	trade.run_Trades(latest, current_price, THRESHOLD, symbol)
-# 		# 	time.sleep(60)
-
-# 	with ft.ThreadPoolExecutor(max_workers=len(symbols)) as executor:
-# 		executor.map(lambda symbol:
-# 			MA.MovingAverageCrossover(symbol,
-#                              		data=client.data).multi_Timeframe_Synthesis(symbol,
-# 																																		client,
-# 																																		client.TF,
-# 																																		THRESHOLD))
-# 	client.shutdown()

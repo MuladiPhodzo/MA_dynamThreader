@@ -1,7 +1,7 @@
 import tkinter as tk
 from tkinter import messagebox
 from tkinter.scrolledtext import ScrolledText
-import queue
+import queue, sys, datetime
 from advisor.Logs import Logger as logs
 
 
@@ -9,8 +9,9 @@ class TextRedirector:
     def __init__(self, log_window):
         self.log_window = log_window
 
-    def write(self, string):
-        self.log_window.queue.put(string)
+    def write(self, string): # avoid printing just newlines
+        timestamp = datetime.datetime.now().strftime("[%H:%M:%S] ")
+        self.log_window.queue.put(timestamp + string)
 
     def flush(self):
         pass
@@ -18,12 +19,12 @@ class TextRedirector:
 
 class LogWindow:
     
-    def __init__(self, master, quit):
+    def __init__(self, master):
         self.window = tk.Toplevel(master) if master else tk.Tk()
         self.window.title("📢 Bot Logs")
-        self.window.geometry("800x600")
+        self.window.geometry("800x500")
 
-        self.log_area = ScrolledText(self.window, wrap=tk.WORD, width=100, height=40, bg="#1e1e1e", fg="#00ff00")
+        self.log_area = ScrolledText(self.window, wrap=tk.WORD, width=100, height=25, bg="#1e1e1e", fg="#00ff00")
         self.log_area.pack(padx=10, pady=10)
         
         self.stop_button = tk.Button(self.window, text="Stop Bot", command=self.quit,
@@ -56,18 +57,9 @@ class UserGUI:
         self.root = tk.Tk()
         self.root.title("Trading Bot Setup")
         self.should_run = None
+        # self.log_window = None
         # Set up GUI window
         self.setup_gui()
-        
-        
-        # # Initialize logger window
-        # self.log_window = LogWindow(None, self.quit)
-        # print(f'intializing user GUI......')
-        # sys.stdout = self.log_window.redirector
-        # sys.stderr = self.log_window.redirector
-        
-        
-        
         
 
     def setup_gui(self):
@@ -91,33 +83,53 @@ class UserGUI:
                  bg="#f4f4f4", fg="#333").grid(row=0, column=0, columnspan=2, pady=(0, 20))
 
         # Input fields
-        print('indexing fields.......')
-        fields = [("Server", "server_entry"), ("Volume", "volume_entry"),
-                  ("Account ID", "account_entry"), ("Password", "password_entry")]
-        
-        for idx, (label, attr) in enumerate(fields, 1):
+        fields = [
+            ("Volume", "volume_entry", "e.g. 0.01"),
+            ("SL distance", "sl_entry", "e.g. 20"),
+            ("RR Ratio", "rr_entry", "e.g. 1:3"),
+            ("Server", "server_entry", ""),
+            ("Account ID", "account_entry", ""),
+            ("Password", "password_entry", "")
+        ]
+        for idx, (label, attr, placeholder) in enumerate(fields, 1):
             tk.Label(main_frame, text=f"{label}:", **label_style).grid(row=idx, column=0, sticky="e", padx=10, pady=5)
             entry = tk.Entry(main_frame, **entry_style)
+            
+            if placeholder:
+                entry.insert(0, placeholder)
+                entry.config(fg="grey")
+
+                def on_focus_in(e, entry=entry, placeholder=placeholder):
+                    if entry.get() == placeholder:
+                        entry.delete(0, tk.END)
+                        entry.config(fg="black")
+
+                def on_focus_out(e, entry=entry, placeholder=placeholder):
+                    if entry.get() == "":
+                        entry.insert(0, placeholder)
+                        entry.config(fg="grey")
+
+                entry.bind("<FocusIn>", on_focus_in)
+                entry.bind("<FocusOut>", on_focus_out)
+
+            # Hide password input
             if label == "Password":
                 entry.config(show="*")
+            
             entry.grid(row=idx, column=1, padx=10, pady=5)
             setattr(self, attr, entry)
-            
-        tk.Button(main_frame, text="Skip", command=self.skip,
-                  bg="#ffcc00", fg="white", font=("Segoe UI", 10, "bold"),
-                  relief="raised", bd=2, padx=10, pady=5).grid(row=idx + 1, column=0, columnspan=2, pady=(20, 5))
-
         # Buttons
-        tk.Button(main_frame, text="Start Bot", command=self.submit,
+        tk.Button(main_frame, text="Run", command=self.submit,
                   bg="#007acc", fg="white", font=("Segoe UI", 10, "bold"),
                   relief="raised", bd=2, padx=10, pady=5).grid(row=idx + 2, column=0, columnspan=2, pady=(20, 5))
 
         
 
     def submit(self):
-        
-        server = self.server_entry.get().strip()
         volume = self.volume_entry.get().strip()
+        sl = self.sl_entry.get().strip()
+        rr = self.rr_entry.get().strip()
+        server = self.server_entry.get().strip()
         account_id = self.account_entry.get().strip()
         password = self.password_entry.get().strip()
 
@@ -134,31 +146,31 @@ class UserGUI:
 
         self.user_data = {
             "volume": volume,
+            'sl': sl,
+            'tp': sl * self.getPtRatio(rr),
             "server": server,
             "account_id": account_id,
             "password": password,
         }
 
-        # Log in to MetaTrader
-        # print('awaiting MT5 handshake')
-        # client = Advisor.MetaTrader5Client()
-        # if not client.logIn(self.user_data):
-        #     messagebox.showerror("Login Error", "Failed to connect to MetaTrader 5.")
-        #     return
-
-        
         self.root.withdraw()
         self.should_run = True
-        logs.FileLogger(self.user_data)
+
+        # logs.FileLogger(self.user_data)
         return self.user_data
     
     def skip(self):
         self.user_data = None
         self.root.withdraw()
         self.should_run = True
-        logs.FileLogger(self.user_data)
+        # logs.FileLogger(self.user_data)
         return self.user_data
     
+    def getPtRatio(self, rr: str):
+        rrValues = [int(digit) for digit in (rr.split(':'))]
+        return max(rrValues) 
+        
+        
     def quit(self):
         print("🛑 Stopping bot and closing app...")
         self.root.quit()
