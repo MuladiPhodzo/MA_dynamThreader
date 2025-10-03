@@ -1,12 +1,21 @@
-Name                                Stmts   Miss  Cover
--------------------------------------------------------
-__init__.py                             0      0   100%
-advisor\__init__.py                     0      0   100%
-advisor\advisor.py                    123    123     0%
-advisor\database\mysqldatabase.py      53     53     0%
-advisor\movingaverage\__init__.py       0      0   100%
-advisor\runadvisorbot.py               79     79     0%
-advisor\trade\__init__.py               0      0   100%
-advisor\trade\tradesalgo.py            45     45     0%
--------------------------------------------------------
-TOTAL                                 300    300     0%
+Name                                     Stmts   Miss  Cover
+------------------------------------------------------------
+__init__.py                                  0      0   100%
+advisor\__init__.py                          0      0   100%
+advisor\client\__init__.py                   0      0   100%
+advisor\client\mt5client.py                150    150     0%
+advisor\database\__init__.py                 0      0   100%
+advisor\database\mysqldatabase.py           53     53     0%
+advisor\gui\__init__.py                      0      0   100%
+advisor\gui\userinput.py                    60     60     0%
+advisor\logs\__init__.py                     0      0   100%
+advisor\logs\logger.py                      33     33     0%
+advisor\ma_dynamadvisor.py                  92     92     0%
+advisor\movingaverage\__init__.py            0      0   100%
+advisor\movingaverage\movingaverage.py     146    146     0%
+advisor\telegram\__init__.py                 0      0   100%
+advisor\telegram\messanger.py               51     51     0%
+advisor\trade\__init__.py                    0      0   100%
+advisor\trade\tradesalgo.py                114    114     0%
+------------------------------------------------------------
+TOTAL                                      699    699     0%

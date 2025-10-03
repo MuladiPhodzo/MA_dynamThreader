@@ -40,8 +40,6 @@ MovingAverage_Advisor/
 
 ```
 
----
-
 ## 🚀 Getting Started
 
 ### 🧰 Prerequisites
@@ -64,7 +62,6 @@ pip install -r requirements.txt
 pyb clean install
 ```
 
----
 
 ### 🐳 Running with Docker
 
@@ -114,7 +111,6 @@ pyb run_unit_tests
 
 ## 📝 Todo
 
-- Add trailing stop-loss and take-profit logic
 - Integrate database logging (MySQL/PostgreSQL)
 - Add support for alternative strategies
 - Implement backtesting module
@@ -123,7 +119,7 @@ pyb run_unit_tests
 
 ## 🧠 Author
 
-**[Your Name]**  
+**Phodzo Lionel Muladi**  
 Email: muladi.lionel@gmail.com  
 LinkedIn: https://www.linkedin.com/in/phodzo-muladi-654214257
 

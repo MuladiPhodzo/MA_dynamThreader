@@ -45,8 +45,13 @@ if __name__ == '__main__':
         packages = [
             '.',
             'advisor',
+            'advisor.Client',
+            'advisor.GUI',
+            'advisor.Logs',
             'advisor.MovingAverage',
-            'advisor.Trade'
+            'advisor.Telegram',
+            'advisor.Trade',
+            'advisor.database'
         ],
         namespace_packages = [],
         py_modules = [],

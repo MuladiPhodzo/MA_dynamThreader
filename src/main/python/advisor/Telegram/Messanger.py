@@ -4,17 +4,28 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram import Update
 import requests, sys
 
+from pathlib import Path
+from dotenv import load_dotenv
+import os, sys
+
 class TelegramMessenger:
     def __init__(self, chat_id=None):
-        
-        base_dir = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
-        env_path = os.path.join(base_dir, '.env')
+        # Detect if running as exe (PyInstaller)
+        if getattr(sys, 'frozen', False):
+            base_dir = Path(sys._MEIPASS)
+        else:
+            # Go up from /src/main/python/advisor/Telegram/Messanger.py to project root
+            base_dir = Path(__file__).resolve().parents[5]
 
-        load_dotenv(dotenv_path=env_path)  # ✅ Explicit path
-        
-        self.BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")  # 🛠️ Use environment variable or provided token
+        env_path = base_dir / ".env"
+        print(f"🔍 Loading .env from: {env_path}")  # Debug log
+
+        load_dotenv(dotenv_path=env_path)
+
+        self.BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
         if not self.BOT_TOKEN:
             raise ValueError("❌ TELEGRAM_BOT_TOKEN not found in .env file")
+
            
         self.chat_id = chat_id
         self.should_run = True  # 🔁 Flag to control bot execution

@@ -7,7 +7,7 @@ import numpy as np
 
 class MovingAverageCrossover:
 
-    def __init__(self,  symbol, data, fast_period=50, slow_period=150):
+    def __init__(self,  symbol, data: pd.DataFrame, fast_period=50, slow_period=150):
         """
         Initialize the strategy with data and parameters.
         
@@ -15,7 +15,8 @@ class MovingAverageCrossover:
         :param fast_period: Period for the fast-moving average.
         :param slow_period: Period for the slow-moving average.
         """
-        ltf_data = data
+        ltf_data = data['LTF']
+        htf_data = data['HTF']
         self.entries = None
         self.fast_period = fast_period
         self.slow_period = slow_period
@@ -41,76 +42,161 @@ class MovingAverageCrossover:
         print(f'MA Data Available for {self.symbol}')
         return self.data	
 
-    def identify_entry_levels(self, HTS_data: pd.DataFrame, LTS_data: pd.DataFrame):
+    def identify_proximity_entries(self, data: pd.DataFrame, pip_distance: int = 100):
         """
-        _summary_
-        Identify entry levels (buy and sell) based on crossovers.
-        requires HTS_data and LTS_data to have 'Bias' column.
+        Identify entries when price is within X pips of the Slow MA,
+        and classify them as Buy or Sell depending on MA alignment.
+        Also auto-assign SL and TP levels.
+
+        Args:
+            data (pd.DataFrame): DataFrame containing at least 
+                                'close', 'Fast_MA', and 'Slow_MA'.
+            pip_distance (int): Number of pips to define proximity (default=100 pips).
 
         Returns:
-            - LTS_data: DataFrame with entry levels and stop loss/take profit levels.
-            _type_: _DataFrame_
-        """        
-        if 'Bias' not in HTS_data.columns or 'Bias' not in LTS_data.columns:
-            raise ValueError("'Bias' column is missing in the data.")   
-        
-        # Define constants outside the loop
-        sl_distance = 0.003
-        tp_distance = 0.01
-        threshold = 50 * 0.01 if self.symbol == 'USDJPY' else 0.0050  # 50 pips × pip size
+            pd.DataFrame: Updated DataFrame with new columns:
+                        'EntrySignal', 'SL', 'TP'.
+        """
+        required_cols = ['close', 'Fast_MA', 'Slow_MA']
+        for col in required_cols:
+            if col not in data.columns:
+                raise ValueError(f"Data must contain '{col}' column.")
 
-        for i in range(len(LTS_data)):
-            row = LTS_data.iloc[i]
-            ltf_time = pd.to_datetime(row['time'])
+        # Determine pip size automatically from last price
+        pip_size = self.get_pip_size(data['close'].iloc[-1])
+        threshold = pip_distance * pip_size
 
-            # Match HTF row
-            htf_match = HTS_data[HTS_data['time'] <= ltf_time]
-            if htf_match.empty:
-                continue
+        # Proximity condition: price near Slow MA
+        data['Proximity'] = abs(data['close'] - data['Slow_MA']) <= threshold
 
-            htf_row = htf_match.iloc[-1]
-            market_bias = htf_row['Bias']
-            ltf_bias = row['Bias']
+        # Initialize new columns
+        data['Entry'] = None
+        data['SL'] = np.nan
+        data['TP'] = np.nan
+
+        signals = []
+        for i, row in data.iterrows():
+            if row['Proximity']:
+                entry_price = row['close']
+
+                if row['Fast_MA'] > row['Slow_MA']:
+                    data.at[i, 'Entry'] = "Buy"
+                    data.at[i, 'SL'] = entry_price - (pip_distance * pip_size)
+                    data.at[i, 'TP'] = entry_price + (2 * pip_distance * pip_size)
+                    
+                    risk = entry_price - data.at[i, 'SL']
+                    reward = data.at[i, 'TP'] - entry_price
+                    rrr = reward / risk if risk != 0 else None
+                    signals.append((i, "Buy", entry_price, data.at[i, 'SL'], data.at[i, 'TP'], rrr))
+                
+                elif row['Fast_MA'] < row['Slow_MA']:
+                    data.at[i, 'Entry'] = "Sell"
+                    data.at[i, 'SL'] = entry_price + (pip_distance * pip_size)
+                    data.at[i, 'TP'] = entry_price - (2 * pip_distance * pip_size)
+                    
+                    risk = data.at[i, 'SL'] - entry_price
+                    reward = entry_price - data.at[i, 'TP']
+                    rrr = reward / risk if risk != 0 else None
+
+                    signals.append((i, "Sell", entry_price, data.at[i, 'SL'], data.at[i, 'TP'], rrr))
+                else:
+                    data.at[i, 'Entry'] = None
             
-            # Derive LTF label
-            ltf_Bias_label = "Buy" if ltf_bias == 'Bullish' else "Sell"
+        print(f"✅ Proximity entries identified for {self.symbol} within {pip_distance} pips of Slow MA, with SL/TP set.")
+        return data
 
-            # Calculate Range
-            range_value = abs(row['close'] - row['Fast_MA'])
-
-            # Set columns cleanly
-            LTS_data.loc[i, 'Market_bias'] = market_bias
-            LTS_data.loc[i, 'ltf_bias'] = ltf_bias
-            LTS_data.loc[i, 'Range'] = range_value
-
-            if range_value <= threshold:
-                if market_bias == 'Bullish' and ltf_Bias_label == 'Buy' and row['close'] > row['Fast_MA']:
-                    LTS_data.loc[i, 'Entry'] = 'Buy'
-                    LTS_data.loc[i, 'Level'] = row['close']
-                    LTS_data.loc[i, 'SL'] = row['close'] - sl_distance
-                    LTS_data.loc[i, 'TP'] = row['close'] + tp_distance
-
-                elif market_bias == 'Bearish' and ltf_Bias_label == 'Sell' and row['close'] < row['Fast_MA']:
-                    LTS_data.loc[i, 'Entry'] = 'Sell'
-                    LTS_data.loc[i, 'Level'] = row['close']
-                    LTS_data.loc[i, 'SL'] = row['close'] + sl_distance
-                    LTS_data.loc[i, 'TP'] = row['close'] - tp_distance
-
-            else:
-                LTS_data.loc[i, 'Entry'] = None
-                LTS_data.loc[i, 'Level'] = None
-                LTS_data.loc[i, 'SL'] = None
-                LTS_data.loc[i, 'TP'] = None
-
-
-        # Clean up bad columns created by tuple headers (from Excel maybe?)
-        cleaned_data = LTS_data.drop(columns=['tick_volume', 'real_volume', 'spread', 'Signal'])
-        # trades = cleaned_data.copy().dropna()
+    def backtest_entries(self, data: pd.DataFrame, pip_distance: int = 100, tp_factor: int = 2):
+        """
+        Backtest moving average entry signals using historical data.
         
-        print("Entry levels identified.")
-            
-        return cleaned_data
-    
+        Args:
+            data (pd.DataFrame): Price and MA data
+            pip_distance (int): Stop distance in pips (default 100)
+            tp_factor (int): Multiplier for TP vs SL (default 2:1 RR)
+        
+        Returns:
+            pd.DataFrame with trade results
+        """
+        if not {'close', 'Fast_MA', 'Slow_MA'}.issubset(data.columns):
+            raise ValueError("Data must contain 'close', 'Fast_MA', and 'Slow_MA' columns.")
+
+        last_price = data['close'].iloc[-1]
+        pip_size = self.get_pip_size(last_price)
+        threshold = pip_distance * pip_size  
+
+        trades = []
+
+        for i in range(len(data)):
+            price = data['close'].iloc[i]
+
+            # Proximity filter
+            if abs(price - data['Fast_MA'].iloc[i]) <= threshold:
+                if data['Fast_MA'].iloc[i] > data['Slow_MA'].iloc[i]:  # Buy setup
+                    entry_type = "Buy"
+                    entry_price = price
+                    sl = entry_price - pip_distance * pip_size
+                    tp = entry_price + (pip_distance * tp_factor * pip_size)
+                elif data['Fast_MA'].iloc[i] < data['Slow_MA'].iloc[i]:  # Sell setup
+                    entry_type = "Sell"
+                    entry_price = price
+                    sl = entry_price + pip_distance * pip_size
+                    tp = entry_price - (pip_distance * tp_factor * pip_size)
+                else:
+                    continue
+
+                # Walk forward to see outcome
+                outcome = "Open"
+                exit_price = None
+                for j in range(i + 1, len(data)):
+                    future_price = data['close'].iloc[j]
+
+                    if entry_type == "Buy":
+                        if future_price <= sl:
+                            outcome = "Loss"
+                            exit_price = sl
+                            break
+                        elif future_price >= tp:
+                            outcome = "Win"
+                            exit_price = tp
+                            break
+                    elif entry_type == "Sell":
+                        if future_price >= sl:
+                            outcome = "Loss"
+                            exit_price = sl
+                            break
+                        elif future_price <= tp:
+                            outcome = "Win"
+                            exit_price = tp
+                            break
+
+                trades.append({
+                    "Index": data.index[i],
+                    "Type": entry_type,
+                    "EntryPrice": entry_price,
+                    "SL": sl,
+                    "TP": tp,
+                    "ExitPrice": exit_price,
+                    "Outcome": outcome,
+                    "Risk": abs(entry_price - sl),
+                    "Reward": abs(tp - entry_price),
+                    "RRR": abs(tp - entry_price) / abs(entry_price - sl) if sl != entry_price else None
+                })
+
+        self.results = pd.DataFrame(trades)
+        print(f"Backtest completed for {self.symbol}. Total trades: {len(self.results)}")
+
+    def get_pip_size(self, price):
+        """Auto-detect pip size from number of decimals in price."""
+        price_str = str(price)
+        if "." in price_str:
+            decimals = len(price_str.split(".")[1])
+            # 2 or 3 decimals → JPY pairs (0.01, 0.001)
+            # 4 or 5 decimals → normal pairs (0.0001, 0.00001)
+            if decimals in [2, 3]:
+                return 0.01
+            elif decimals in [4, 5]:
+                return 0.0001
+        return 0.0001  # fallback
 
     def save_signals_to_csv(self, data, file_name="src/main/python/advisor/Logs/Rates"):
         """
@@ -167,87 +253,67 @@ class MovingAverageCrossover:
         ax = plt.subplots(figsize=(18, 6))
 
         # Plot market data (uses self.data.index)
-        # Ensure time column is in datetime format and sorted
-        ltf_data['time'] = pd.to_datetime(ltf_data['time'])
-        ltf_data = ltf_data.sort_values(by='time')
+        ax.plot(ltf_data.index, ltf_data['close'], label="Close", color='black')
+        ax.plot(ltf_data.index, ltf_data['Fast_MA'], label=f"Fast MA ({self.fast_period})", color='blue')
+        ax.plot(ltf_data.index, ltf_data['Slow_MA'], label=f"Slow MA ({self.slow_period})", color='red')
 
-        # Set time as x-axis ticks properly
-        ax.plot(ltf_data['time'], ltf_data['close'], label="Close", color='black')
-        ax.plot(ltf_data['time'], ltf_data['Fast_MA'], label=f"Fast MA ({self.fast_period})", color='blue')
-        ax.plot(ltf_data['time'], ltf_data['Slow_MA'], label=f"Slow MA ({self.slow_period})", color='red')
-        
-        ax.fill_between(ltf_data['time'], ltf_data['Fast_MA'], ltf_data['Slow_MA'], where=(ltf_data['Fast_MA'] > ltf_data['Slow_MA']), color='green', alpha=0.3, label='Bullish Zone')
-        ax.fill_between(ltf_data['time'], ltf_data['Fast_MA'], ltf_data['Slow_MA'], where=(ltf_data['Fast_MA'] < ltf_data['Slow_MA']), color='red', alpha=0.3, label='Bearish Zone')
-        ax.fill_between(ltf_data['time'], ltf_data['Fast_MA'], ltf_data['close'], where=(ltf_data['Fast_MA'] - ltf_data['close'] <= 0.005), color='orange', alpha=0.3, label='Range')
+        ax.fill_between(ltf_data.index, ltf_data['Fast_MA'], ltf_data['Slow_MA'], where=(ltf_data['Fast_MA'] > ltf_data['Slow_MA']), color='green', alpha=0.3, label='Bullish Zone')
+        ax.fill_between(ltf_data.index, ltf_data['Fast_MA'], ltf_data['Slow_MA'], where=(ltf_data['Fast_MA'] < ltf_data['Slow_MA']), color='red', alpha=0.3, label='Bearish Zone')
+        ax.fill_between(ltf_data.index, ltf_data['Fast_MA'], ltf_data['close'], where=(ltf_data['Fast_MA'] - ltf_data['close'] <= 0.005), color='orange', alpha=0.3, label='Range')
 
         # Plot Buy signals
         buy_signals = ltf_data[ltf_data['Entry'] == 'Buy']
-        if not buy_signals.empty:
-            for i in buy_signals.index:
-                time = buy_signals.loc[i, 'time']
-                tp = buy_signals.loc[i, 'TP']
-                sl = buy_signals.loc[i, 'SL']
-                ax.scatter(time, buy_signals.loc[i, 'Level'], marker='^', color='green', label='Buy Signal' if i == buy_signals.index[0] else "")
-                # Draw short horizontal lines (1-minute window or so)
-                ax.hlines(y=tp, xmin=time - pd.Timedelta(minutes=1), xmax=time + pd.Timedelta(minutes=1),
-                        color='green', linestyles='--', label='TP' if i == buy_signals.index[0] else "")
-                
-                ax.hlines(y=sl, xmin=time - pd.Timedelta(minutes=1), xmax=time + pd.Timedelta(minutes=1),
-                        color='red', linestyles='--', label='SL' if i == buy_signals.index[0] else "")
-        # Plot Sell signals
-        sell_signals = ltf_data[ltf_data['Entry'] == 'Sell']
-        if not sell_signals.empty:
-            for i in sell_signals.index:
-                time = sell_signals.loc[i, 'time']
-                tp = sell_signals.loc[i, 'TP']
-                sl = sell_signals.loc[i, 'SL']
-                
-                ax.scatter(time, sell_signals.loc[i, 'Level'], marker='v', color='red', label='Sell Signal' if i == sell_signals.index[0] else "")
-                
-                # Draw short horizontal lines (1-minute window or so)
-                ax.hlines(y=tp, xmin=time - pd.Timedelta(minutes=1), xmax=time + pd.Timedelta(minutes=1),
-                        color='green', linestyles='--', label='TP' if i == sell_signals.index[0] else "")
-                
-                ax.hlines(y=sl, xmin=time - pd.Timedelta(minutes=1), xmax=time + pd.Timedelta(minutes=1),
-                        color='red', linestyles='--', label='SL' if i == sell_signals.index[0] else "")
+        # Plot entries and SL/TP
+        for i, row in ltf_data.iterrows():
+            if row['Entry'] == "Buy":
+                plt.scatter(row['time'], row['close'], marker='^', color='green', label='Buy' if i == 0 else "")
+                plt.hlines(y=row['SL'], xmin=row['time'] - pd.Timedelta(minutes=1), xmax=row['time'] + pd.Timedelta(minutes=1),
+                        color='red', linestyles='--', label='SL' if i == 0 else "")
+                plt.hlines(y=row['TP'], xmin=row['time'] - pd.Timedelta(minutes=1), xmax=row['time'] + pd.Timedelta(minutes=1),
+                        color='green', linestyles='--', label='TP' if i == 0 else "")
+            elif row['Entry'] == "Sell":
+                plt.scatter(row['time'], row['close'], marker='v', color='red', label='Sell' if i == 0 else "")
+                plt.hlines(y=row['SL'], xmin=row['time'] - pd.Timedelta(minutes=1), xmax=row['time'] + pd.Timedelta(minutes=1),
+                        color='red', linestyles='--', label='SL' if i == 0 else "")
+                plt.hlines(y=row['TP'], xmin=row['time'] - pd.Timedelta(minutes=1), xmax=row['time'] + pd.Timedelta(minutes=1),
+                        color='green', linestyles='--', label='TP' if i == 0 else "")
 
-        ax.set_xticks(ltf_data['time'][::max(1, len(ltf_data) // 10)])  # show ~10 evenly spaced labels
-        ax.tick_params(axis='x', rotation=45)
-
-        plt.title(f"{self.symbol}-Moving Average Entry Signals")
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-        plt.xticks(rotation=45)
+        plt.title(f"{self.symbol} - Moving Average Proximity Entries")
         plt.xlabel("Time")
         plt.ylabel("Price")
         plt.legend()
         plt.grid(True)
         plt.tight_layout()
-        plt.show()    
+        plt.show() 
     
-    def run_moving_average_strategy(self, symbol, data, MA: 'MovingAverageCrossover'):
+    def run_moving_average_strategy(self, symbol, data):
         """
-        Fetch rates data and apply the Moving Average Crossover strategy.
+        Run the Moving Average strategy using historical data.
+        Detect proximity entries and plot them with SL/TP levels.
 
-        :param symbol: The symbol to fetch data for (e.g., 'EURUSD').
-        :param timeframe: Timeframe for the rates (e.g., mt5.TIMEFRAME_M15).
-        :param start_time: Starting datetime for fetching rates.
-        :param count: Number of bars to fetch.
+        Args:
+            symbol (str): Symbol to run strategy on.
+            data (dict): Dictionary with 'HTF' and 'LTF' DataFrames.
         """
-    
-        ltf_data  = data['LTF']
-        htf_data = data['HTF']
-        
-        if data is None:
+        if data is None or 'LTF' not in data or 'HTF' not in data:
             print(f"Failed to retrieve data for {symbol}.")
             return None
-        
-        ltf_data = self.identify_entry_levels(ltf_data, htf_data)
-        self.save_signals_to_csv(file_name=f"src/main/python/Advisor/Logs/{self.symbol}_entry_levels.csv", data=ltf_data)
-        
-        # results = self.backtest_strategy()
+        dataCopy = data.copy()
+        ltf_data = dataCopy['LTF']
+        htf_data = dataCopy['HTF']
 
-        # Plot the results
-        self.plot_charts(ltf_data)
-        # self.plot_performance()s
+        # Step 1: Calculate MAs if not already calculated
+        if 'Fast_MA' not in ltf_data.columns or 'Slow_MA' not in ltf_data.columns:
+            self.calculate_moving_averages(ltf_data)
+        if 'Fast_MA' not in htf_data.columns or 'Slow_MA' not in htf_data.columns:
+            self.calculate_moving_averages(htf_data)
+
+        # Step 2: Identify historical proximity entries
+        ltf_data = self.identify_proximity_entries(ltf_data, pip_distance=100)
+
+        # Optional: save signals to CSV
+        self.save_signals_to_csv(ltf_data, file_name=f"src/main/python/Advisor/Logs/{symbol}_entry_levels.csv")
+
+        self.plot_charts()
+
         

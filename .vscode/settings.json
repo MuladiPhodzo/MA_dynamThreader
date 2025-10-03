@@ -1,6 +1,7 @@
 {
     "python.analysis.extraPaths": [
-        "./src/main/python"
+        "./src/main/python",
+        "./src/main/python/advisor"
     ],
     "python.testing.unittestArgs": [
         "-v",

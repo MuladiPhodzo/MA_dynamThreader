@@ -9,14 +9,29 @@ running build_py
 creating build\lib
 copying __init__.py -> build\lib
 creating build\lib\advisor
-copying advisor\Advisor.py -> build\lib\advisor
-copying advisor\RunAdvisorBot.py -> build\lib\advisor
+copying advisor\MA_DynamAdvisor.py -> build\lib\advisor
 copying advisor\__init__.py -> build\lib\advisor
+creating build\lib\advisor\Client
+copying advisor\Client\mt5Client.py -> build\lib\advisor\Client
+copying advisor\Client\__init__.py -> build\lib\advisor\Client
+creating build\lib\advisor\GUI
+copying advisor\GUI\userInput.py -> build\lib\advisor\GUI
+copying advisor\GUI\__init__.py -> build\lib\advisor\GUI
+creating build\lib\advisor\Logs
+copying advisor\Logs\Logger.py -> build\lib\advisor\Logs
+copying advisor\Logs\__init__.py -> build\lib\advisor\Logs
 creating build\lib\advisor\MovingAverage
+copying advisor\MovingAverage\MovingAverage.py -> build\lib\advisor\MovingAverage
 copying advisor\MovingAverage\__init__.py -> build\lib\advisor\MovingAverage
+creating build\lib\advisor\Telegram
+copying advisor\Telegram\Messanger.py -> build\lib\advisor\Telegram
+copying advisor\Telegram\__init__.py -> build\lib\advisor\Telegram
 creating build\lib\advisor\Trade
 copying advisor\Trade\TradesAlgo.py -> build\lib\advisor\Trade
 copying advisor\Trade\__init__.py -> build\lib\advisor\Trade
+creating build\lib\advisor\database
+copying advisor\database\MySQLdatabase.py -> build\lib\advisor\database
+copying advisor\database\__init__.py -> build\lib\advisor\database
 c:\users\ras51111\documents\myprojects\movingaverage_advisor\.pybuilder\plugins\cpython-3.13.3.final.0\Lib\site-packages\setuptools\_distutils\cmd.py:90: SetuptoolsDeprecationWarning: setup.py install is deprecated.
 !!
 
@@ -35,10 +50,25 @@ running install
 running install_lib
 creating build\bdist.win-amd64\wheel
 creating build\bdist.win-amd64\wheel\advisor
-copying build\lib\advisor\Advisor.py -> build\bdist.win-amd64\wheel\.\advisor
+creating build\bdist.win-amd64\wheel\advisor\Client
+copying build\lib\advisor\Client\mt5Client.py -> build\bdist.win-amd64\wheel\.\advisor\Client
+copying build\lib\advisor\Client\__init__.py -> build\bdist.win-amd64\wheel\.\advisor\Client
+creating build\bdist.win-amd64\wheel\advisor\database
+copying build\lib\advisor\database\MySQLdatabase.py -> build\bdist.win-amd64\wheel\.\advisor\database
+copying build\lib\advisor\database\__init__.py -> build\bdist.win-amd64\wheel\.\advisor\database
+creating build\bdist.win-amd64\wheel\advisor\GUI
+copying build\lib\advisor\GUI\userInput.py -> build\bdist.win-amd64\wheel\.\advisor\GUI
+copying build\lib\advisor\GUI\__init__.py -> build\bdist.win-amd64\wheel\.\advisor\GUI
+creating build\bdist.win-amd64\wheel\advisor\Logs
+copying build\lib\advisor\Logs\Logger.py -> build\bdist.win-amd64\wheel\.\advisor\Logs
+copying build\lib\advisor\Logs\__init__.py -> build\bdist.win-amd64\wheel\.\advisor\Logs
+copying build\lib\advisor\MA_DynamAdvisor.py -> build\bdist.win-amd64\wheel\.\advisor
 creating build\bdist.win-amd64\wheel\advisor\MovingAverage
+copying build\lib\advisor\MovingAverage\MovingAverage.py -> build\bdist.win-amd64\wheel\.\advisor\MovingAverage
 copying build\lib\advisor\MovingAverage\__init__.py -> build\bdist.win-amd64\wheel\.\advisor\MovingAverage
-copying build\lib\advisor\RunAdvisorBot.py -> build\bdist.win-amd64\wheel\.\advisor
+creating build\bdist.win-amd64\wheel\advisor\Telegram
+copying build\lib\advisor\Telegram\Messanger.py -> build\bdist.win-amd64\wheel\.\advisor\Telegram
+copying build\lib\advisor\Telegram\__init__.py -> build\bdist.win-amd64\wheel\.\advisor\Telegram
 creating build\bdist.win-amd64\wheel\advisor\Trade
 copying build\lib\advisor\Trade\TradesAlgo.py -> build\bdist.win-amd64\wheel\.\advisor\Trade
 copying build\lib\advisor\Trade\__init__.py -> build\bdist.win-amd64\wheel\.\advisor\Trade
@@ -57,12 +87,22 @@ running install_scripts
 creating build\bdist.win-amd64\wheel\movingaverage_advisor-0.1.0.dist-info\WHEEL
 creating 'dist\movingaverage_advisor-0.1.0-py3-none-any.whl' and adding 'build\bdist.win-amd64\wheel' to it
 adding '__init__.py'
-adding 'advisor/Advisor.py'
-adding 'advisor/RunAdvisorBot.py'
+adding 'advisor/MA_DynamAdvisor.py'
 adding 'advisor/__init__.py'
+adding 'advisor/Client/__init__.py'
+adding 'advisor/Client/mt5Client.py'
+adding 'advisor/GUI/__init__.py'
+adding 'advisor/GUI/userInput.py'
+adding 'advisor/Logs/Logger.py'
+adding 'advisor/Logs/__init__.py'
+adding 'advisor/MovingAverage/MovingAverage.py'
 adding 'advisor/MovingAverage/__init__.py'
+adding 'advisor/Telegram/Messanger.py'
+adding 'advisor/Telegram/__init__.py'
 adding 'advisor/Trade/TradesAlgo.py'
 adding 'advisor/Trade/__init__.py'
+adding 'advisor/database/MySQLdatabase.py'
+adding 'advisor/database/__init__.py'
 adding 'movingaverage_advisor-0.1.0.dist-info/METADATA'
 adding 'movingaverage_advisor-0.1.0.dist-info/WHEEL'
 adding 'movingaverage_advisor-0.1.0.dist-info/namespace_packages.txt'

@@ -19,8 +19,13 @@ running check
 creating movingaverage_advisor-0.1.0
 creating movingaverage_advisor-0.1.0\MovingAverage_Advisor.egg-info
 creating movingaverage_advisor-0.1.0\advisor
+creating movingaverage_advisor-0.1.0\advisor\Client
+creating movingaverage_advisor-0.1.0\advisor\GUI
+creating movingaverage_advisor-0.1.0\advisor\Logs
 creating movingaverage_advisor-0.1.0\advisor\MovingAverage
+creating movingaverage_advisor-0.1.0\advisor\Telegram
 creating movingaverage_advisor-0.1.0\advisor\Trade
+creating movingaverage_advisor-0.1.0\advisor\database
 copying files to movingaverage_advisor-0.1.0...
 copying __init__.py -> movingaverage_advisor-0.1.0
 copying setup.py -> movingaverage_advisor-0.1.0
@@ -30,12 +35,22 @@ copying MovingAverage_Advisor.egg-info\dependency_links.txt -> movingaverage_adv
 copying MovingAverage_Advisor.egg-info\namespace_packages.txt -> movingaverage_advisor-0.1.0\MovingAverage_Advisor.egg-info
 copying MovingAverage_Advisor.egg-info\top_level.txt -> movingaverage_advisor-0.1.0\MovingAverage_Advisor.egg-info
 copying MovingAverage_Advisor.egg-info\zip-safe -> movingaverage_advisor-0.1.0\MovingAverage_Advisor.egg-info
-copying advisor\Advisor.py -> movingaverage_advisor-0.1.0\advisor
-copying advisor\RunAdvisorBot.py -> movingaverage_advisor-0.1.0\advisor
+copying advisor\MA_DynamAdvisor.py -> movingaverage_advisor-0.1.0\advisor
 copying advisor\__init__.py -> movingaverage_advisor-0.1.0\advisor
+copying advisor\Client\__init__.py -> movingaverage_advisor-0.1.0\advisor\Client
+copying advisor\Client\mt5Client.py -> movingaverage_advisor-0.1.0\advisor\Client
+copying advisor\GUI\__init__.py -> movingaverage_advisor-0.1.0\advisor\GUI
+copying advisor\GUI\userInput.py -> movingaverage_advisor-0.1.0\advisor\GUI
+copying advisor\Logs\Logger.py -> movingaverage_advisor-0.1.0\advisor\Logs
+copying advisor\Logs\__init__.py -> movingaverage_advisor-0.1.0\advisor\Logs
+copying advisor\MovingAverage\MovingAverage.py -> movingaverage_advisor-0.1.0\advisor\MovingAverage
 copying advisor\MovingAverage\__init__.py -> movingaverage_advisor-0.1.0\advisor\MovingAverage
+copying advisor\Telegram\Messanger.py -> movingaverage_advisor-0.1.0\advisor\Telegram
+copying advisor\Telegram\__init__.py -> movingaverage_advisor-0.1.0\advisor\Telegram
 copying advisor\Trade\TradesAlgo.py -> movingaverage_advisor-0.1.0\advisor\Trade
 copying advisor\Trade\__init__.py -> movingaverage_advisor-0.1.0\advisor\Trade
+copying advisor\database\MySQLdatabase.py -> movingaverage_advisor-0.1.0\advisor\database
+copying advisor\database\__init__.py -> movingaverage_advisor-0.1.0\advisor\database
 copying MovingAverage_Advisor.egg-info\SOURCES.txt -> movingaverage_advisor-0.1.0\MovingAverage_Advisor.egg-info
 Writing movingaverage_advisor-0.1.0\setup.cfg
 creating dist

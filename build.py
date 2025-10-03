@@ -25,6 +25,8 @@ def set_properties(project):
     
     
     # DO NOT add 'unittest' here, it's built-in
-    project.build_depends_on("pandas")  
-    project.build_depends_on("numpy")
-    project.build_depends_on("MetaTrader5") # MetaTrader5 API
+    project.depends_on("pandas")
+    project.depends_on("numpy")
+    project.depends_on("matplotlib")
+    project.depends_on("MetaTrader5")
+    project.depends_on("pytest")
