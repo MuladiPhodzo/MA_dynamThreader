@@ -29,13 +29,11 @@ typecheck:
 
 # Build standalone executable with pyinstaller
 build: clean test
-	pyinstaller --noconsole --onefile \
-		--icon=src/main/python/advisor/money_robot_Q94_icon.ico \
-		src/main/python/advisor/RunAdvisorBot.py
+	pyinstaller MA_DynamAdvisor.spec
 
 # Run the bot directly (useful for dev without rebuilding)
 run:
-	python src/main/python/advisor/RunAdvisorBot.py
+	python src/main/python/advisor/MA_DynamAdvisor.py
 
 # Install dependencies
 install:
@@ -47,7 +45,7 @@ update-deps:
 
 # Package zip for distribution (e.g. for testers)
 package: build
-	cd dist && zip -r advisor_bot.zip RunAdvisorBot.exe README.md
+	cd dist && zip -r MA_DynamAdvisort.zip RMA_DynamAdvisor.exe README.md
 
 # Full pipeline: test -> lint -> build -> package
 release: lint test build package

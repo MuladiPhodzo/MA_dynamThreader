@@ -3,33 +3,44 @@ from tkinter import messagebox
 import pandas as pd
 from pandas.plotting import register_matplotlib_converters
 import MetaTrader5 as mt5
+
 from dateutil.relativedelta import relativedelta
 import datetime
 import os
+import sys
+
+import json
+import csv
+
 
 
 register_matplotlib_converters()
 
 
 class MetaTrader5Client:
-    def __init__(self, 
-                threshold = 0.0100, 
+    def __init__(self,  
                 timeframes = None
             ):
         self.symbols = []
-        self.THRESHOLD = threshold
+        self.THRESHOLD = 0.0100
         self.account_info = None
         self.terminal_info = None
         self.TF = {}
         self._configTF(timeframes) if timeframes else self._configTF(['30M', '2H'])
         
     def _configTF(self, timeframes):
-        TF_dict = {'1M': mt5.TIMEFRAME_M1, '15M': mt5.TIMEFRAME_M15, '30M': mt5.TIMEFRAME_M30, '1H': mt5.TIMEFRAME_H1, '2H': mt5.TIMEFRAME_H2, '4H': mt5.TIMEFRAME_H4, '1D': mt5.TIMEFRAME_D1, '1W': mt5.TIMEFRAME_W1 }
-        self.TF['LTF'] = TF_dict[timeframes[0]]
-        self.TF['HTF'] = TF_dict[timeframes[1]]
-        
+        try:
+            TF_dict = {'1M': mt5.TIMEFRAME_M1, '15M': mt5.TIMEFRAME_M15, '30M': mt5.TIMEFRAME_M30, '1H': mt5.TIMEFRAME_H1, '2H': mt5.TIMEFRAME_H2, '4H': mt5.TIMEFRAME_H4, '1D': mt5.TIMEFRAME_D1, '1W': mt5.TIMEFRAME_W1 }
+            self.TF['LTF'] = TF_dict[timeframes[0]]
+            self.TF['HTF'] = TF_dict[timeframes[1]]
+        except KeyError as e:
+            print(f"❌ Invalid timeframe provided: {e}. Using default timeframes 30M and 2H.")
+            self.TF['LTF'] = TF_dict['30M']
+            self.TF['HTF'] = TF_dict['2H']
+
     def logIn(self, user_data):
         print("🔑 Logging in to MetaTrader 5...")
+        
         res = self.initialize(user_data)
         
         if not res[0]:
@@ -185,44 +196,72 @@ class MetaTrader5Client:
         except Exception as e:
             print(f"❌ Error during shutdown: {e}")
             return True
+        
+    def _shut_down_bot(self):
+        '''shut down MT5 connection and exit the bot'''
+        try:
+            self.close()
+        finally:
+            print("🔌 Disconnected from MetaTrader 5. Exiting bot...")
+            sys.exit(0)
 
 class dataHandler:
-    def toCSV(self, data, file_path):
+    def save_trade(self, trade_data, file_type="json"):
         """
-        Save the provided DataFrame to a CSV file.
-        - Creates the file if it doesn't exist.
-        - Appends to the file if it already exists.
-        """
-        if data is not None and not data.empty:
-            file_exists = os.path.isfile(file_path)
+        Saves trade information to a file (JSON or CSV).
 
-            if not file_exists:
-                data.to_csv(file_path, index=False, mode='w', header=True)
-                print(f"New file created and data saved to {file_path}.")
-            else:
-                data.to_csv(file_path, index=False, mode='a', header=False)
-                print(f"Data appended to existing file {file_path}.")
+        Args:
+            trade_data (dict): Trade details to save.
+            file_type (str): 'json' or 'csv'.
+        """
+        # Ensure trades directory exists
+        os.makedirs("trades", exist_ok=True)
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+        if file_type.lower() == "json":
+            file_path = "trades/trades_log.json"
+            self._toJSON(file_path, trade_data, timestamp)
+
+        elif file_type.lower() == "csv":
+            file_path = "trades/trades_log.csv"
+            self._toCSV(file_path, trade_data, timestamp)
+
         else:
-            print("No data to save.")
+            raise ValueError("Unsupported file type. Use 'json' or 'csv'.")
+
+    def _toJSON(self, file_path, trade_data, timestamp):
+        """Helper method for JSON saving"""
+        entry = {"timestamp": timestamp, **trade_data}
+
+        if os.path.exists(file_path):
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except json.JSONDecodeError:
+                data = []
+        else:
+            data = []
+
+        data.append(entry)
+
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
+
+        print(f"✅ Trade saved to {file_path}")
+
+    def _toCSV(self, file_path, trade_data, timestamp):
+        """Helper method for CSV saving"""
+        entry = {"timestamp": timestamp, **trade_data}
+        file_exists = os.path.exists(file_path)
+
+        with open(file_path, "a", newline='', encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=entry.keys())
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow(entry)
+        print(f"✅ Trade saved to {file_path}")
+        
             
-    def toJSON(self, data, file_path):
-        """
-        Save the provided DataFrame to a JSON file.
-        - Creates the file if it doesn't exist.
-        - Appends to the file if it already exists.
-        """
-        if data is not None and not data.empty:
-            file_exists = os.path.isfile(file_path)
-
-            if not file_exists:
-                data.to_json(file_path, orient='records', lines=True)
-                print(f"New file created and data saved to {file_path}.")
-            else:
-                with open(file_path, 'a') as f:
-                    data.to_json(f, orient='records', lines=True)
-                print(f"Data appended to existing file {file_path}.")
-        else:
-            print("No data to save.")
 class DataPlotter:
 
     @staticmethod

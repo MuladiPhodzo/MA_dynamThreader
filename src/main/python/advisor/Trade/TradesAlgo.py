@@ -1,7 +1,8 @@
 import MetaTrader5 as mt5
 import pandas as pd
 import datetime as dt
-from Telegram import Messanger
+from advisor.Telegram import Messanger
+from advisor.Client import mt5Client
 
 class MT5TradingAlgorithm:
     def __init__(self, symbol, telegram: Messanger.TelegramMessenger, user_data, magic_number=8000):
@@ -82,8 +83,9 @@ class MT5TradingAlgorithm:
         except Exception as e:
             print(f"❌ Error placing order: {e}")
             return False
+        
 
-    def run_Trades(self, market_bias, ltf_Bias, latest, current_price, THRESHOLD, symbol):
+    def run_Trades(self, market_bias, ltf_Bias: pd.DataFrame, latest, current_price, THRESHOLD, symbol):
         """ Execute trading logic based on market and LTF bias.
         :param market_bias: 'Bullish' or 'Bearish' for the higher timeframe.
         :param ltf_Bias: 'Buy' or 'Sell' for the lower timeframe.
@@ -186,11 +188,16 @@ class MT5TradingAlgorithm:
                         self.current_position = action
                         self.openTrades += 1
                         self.opened[self.openTrades] = True
-                        print(f"🟢 {self.symbol} Placing {action.upper()} order...")
+                        print(f"🟢 {self.symbol} Placing{str(action).upper()} order...")
                         return True, request
+                    
         except Exception as e:
-            return False
+            raise Exception(f"❌ Error executing trade: {e}")
+        
         finally:
             print(f'sending Telegram: {self.symbol} {action} signal via telegram...')
             self.telegram.send_message(f"🟢 {action} {self.symbol} | TP: {request['tp']} | SL: {request['sl']}\n NB: use proper risk management")
+            mt5Client.dataHandler._toCSV("Trade/trades_log.csv", request, dt.datetime.now().strftime("%Y-%m-%d %H:%M"))
+            self.TradesData.add(request)
+            
             return True

@@ -1,57 +1,115 @@
 import tkinter as tk
+from tkinter import ttk, messagebox, scrolledtext
 import ttkbootstrap as tb
 from ttkbootstrap.constants import *
-from tkinter.scrolledtext import ScrolledText
-from tkinter import messagebox
-import threading
-import queue
 import datetime
+import queue
 import time
+import sys
 
-# -------------------------
-# Log Window
-# -------------------------
+
+import json
+import os
+
+from Client import mt5Client
+
+CONFIG_FILE = "user_config.json"
+
+# ==========================================================
+#              TEXT REDIRECTOR (stdout -> GUI)
+# ==========================================================
 class TextRedirector:
+    """Redirects print statements to both GUI and console."""
+
     def __init__(self, log_window):
         self.log_window = log_window
+        self.stdout = sys.stdout
+        sys.stdout = self  # redirect global output
 
-    def write(self, string):
-        timestamp = datetime.datetime.now().strftime("[%H:%M:%S] ")
-        self.log_window.queue.put(timestamp + string)
+    def write(self, message):
+        message = message.strip()
+        if message:
+            try:
+                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                self.log_window.queue.put(f"[{timestamp}] {message}")
+            except Exception:
+                pass
+            self.stdout.write(message + "\n")
+            self.stdout.flush()
 
     def flush(self):
-        pass
+        self.stdout.flush()
 
+    def restore(self):
+        sys.stdout = self.stdout
+
+
+# ==========================================================
+#                  LOG WINDOW (Child GUI)
+# ==========================================================
 class LogWindow:
-    def __init__(self, master):
-        self.window = tk.Toplevel(master) if master else tb.Window(themename="cosmo")
-        self.window.title("📢 Bot Logs")
-        self.window.geometry("1000x600")
-        self.clientData = None
-        self.sections = {}
-        # --- Main container (side by side panels) ---
-        main_frame = tb.Frame(self.window)
-        main_frame.pack(fill="both", expand=True, padx=10, pady=10)
+    """Window displaying live logs and bot summary."""
 
-        # --- Live Logs Panel ---
-        live_panel = tb.Frame(main_frame)
+    paused = False
+
+    def __init__(self, master: tb.Window):
+        # --- Window ---
+        self.window = tk.Toplevel(master)
+        self.window.title("📢 Trading Advisor Bot — Running")
+        self.window.geometry("1400x800")
+
+        self.queue = queue.Queue()
+        self._build_main_layout()
+        self._build_live_log_panel()
+        self._build_summary_panel()
+
+        # --- Poll queue + redirector ---
+        self.poll_queue()
+        self.redirector = TextRedirector(self)
+
+    # ----------------------------------------------------------
+    # LAYOUT
+    # ----------------------------------------------------------
+    def _build_main_layout(self):
+        self.main_frame = tb.Frame(self.window)
+        self.main_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        self.main_frame.columnconfigure(0, weight=2)
+        self.main_frame.columnconfigure(1, weight=1)
+        self.main_frame.rowconfigure(0, weight=1)
+
+    def _build_live_log_panel(self):
+        live_panel = tb.Frame(self.main_frame)
         live_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
 
         self.log_area_frame = tb.LabelFrame(live_panel, text="📡 Live Logs", padding=10)
         self.log_area_frame.pack(fill="both", expand=True)
 
-        self.log_area = tk.Text(
+        self.log_area = scrolledtext.ScrolledText(
             self.log_area_frame,
             wrap=tk.WORD,
-            bg="#1e1e1e",
-            fg="#00ff00",
+            font=("Consolas", 10),
+            bg="#000000",
+            fg="#00ff11",
             state="disabled",
         )
         self.log_area.pack(fill="both", expand=True)
 
-        # --- Trading Bot Summary Panel ---
+        # Buttons
+        btn_frame = tb.Frame(live_panel)
+        btn_frame.pack(pady=5)
+
+        tb.Button(btn_frame, text="❌ Stop Bot", bootstyle=DANGER, command=self.quit).pack(side="left", padx=10)
+        self.pause_button = tb.Button(
+            btn_frame,
+            text="⏸ Pause Bot",
+            bootstyle=INFO,
+            command=self.toggle_pause,
+        )
+        self.pause_button.pack(side="left", padx=10)
+
+    def _build_summary_panel(self):
         summary_panel = tb.LabelFrame(
-            main_frame, text="📜 Trading Bot Summary", padding=10
+            self.main_frame, text="📜 Trading Bot Summary", padding=10
         )
         summary_panel.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
 
@@ -61,43 +119,27 @@ class LogWindow:
             bg="#1e1e1e",
             fg="#00ff00",
             height=15,
-            state="disabled",  # make readonly
+            state="disabled",
         )
         self.summary_area.pack(fill="both", expand=True)
-
-        # --- Load Sample Summary Data ---
         self._load_sample_summary()
-        
+
         self.summary_container = tb.Frame(summary_panel)
         self.summary_container.pack(fill="both", expand=True, pady=10)
 
         self.add_collapsible_section("Change Rates", {
-            "Daily": "+12%", 
-            "Weekly": "+7%", 
-            "Monthly": "-5%"
-            })
+            "Daily": "+12%",
+            "Weekly": "+7%",
+            "Monthly": "-5%",
+        })
         self.add_collapsible_section("Charts", {
-            "Percentage Change": "+3.4%"})
+            "Percentage Change": "+3.4%",
+        })
 
-
-        # --- Make columns resize proportionally ---
-        main_frame.columnconfigure(0, weight=2)  # Live Logs wider
-        main_frame.columnconfigure(1, weight=1)  # Summary smaller
-        main_frame.rowconfigure(0, weight=1)
-
-        # Stop button directly under Live Logs
-        self.stop_button = tb.Button(
-            live_panel, text="❌ Stop Bot", bootstyle=DANGER, command=self.quit
-        )
-        self.stop_button.pack(pady=5)
-
-        # --- Queue + redirector ---
-        self.queue = queue.Queue()
-        self.poll_queue()
-        self.redirector = TextRedirector(self)
-
+    # ----------------------------------------------------------
+    # UTILITIES
+    # ----------------------------------------------------------
     def _load_sample_summary(self):
-        """Load sample trading bot summary data"""
         summary_data = {
             "Performance": {
                 "Total Trades Executed": 12,
@@ -115,30 +157,27 @@ class LogWindow:
         self.summary_area.config(state="normal")
         self.summary_area.delete("1.0", tk.END)
         self.summary_area.insert(tk.END, "📊 Trading Performance Summary\n\n")
-        
-        for key, value in summary_data.items():
-            self.summary_area.insert(tk.END, f"{key}: {value}\n")
+        for key, values in summary_data.items():
+            self.summary_area.insert(tk.END, f"{key}:\n")
+            for metric, val in values.items():
+                self.summary_area.insert(tk.END, f"   - {metric}: {val}\n")
+            self.summary_area.insert(tk.END, "\n")
         self.summary_area.config(state="disabled")
-        
+
     def add_collapsible_section(self, title, data: dict):
-        """Add a collapsible panel to the summary container"""
         section_frame = tb.Frame(self.summary_container)
         section_frame.pack(fill="x", pady=5)
 
-        # Button to toggle
         toggle_btn = tb.Button(section_frame, text=f"▶ {title}", bootstyle=INFO, width=20)
         toggle_btn.pack(fill="x")
 
-        # Content frame
         content_frame = tb.Frame(section_frame)
         content_frame.pack(fill="x", padx=10, pady=2)
-        content_frame.visible = True  # Custom attribute
+        content_frame.visible = True
 
-        # Populate content
         for key, value in data.items():
             tb.Label(content_frame, text=f"{key}: {value}", anchor="w").pack(fill="x")
 
-        # Toggle function
         def toggle():
             if content_frame.visible:
                 content_frame.pack_forget()
@@ -149,47 +188,73 @@ class LogWindow:
             content_frame.visible = not content_frame.visible
 
         toggle_btn.config(command=toggle)
-        
+
+    # ----------------------------------------------------------
+    # LOG + CONTROL
+    # ----------------------------------------------------------
     def poll_queue(self):
         try:
             while True:
                 message = self.queue.get_nowait()
-                self.log_area.insert(tk.END, message + "\n")
-                self.log_area.see(tk.END)
+                self._append_log(message)
+            # end while
         except queue.Empty:
             pass
         self.window.after(100, self.poll_queue)
 
+    def _append_log(self, message: str):
+        self.log_area.config(state="normal")
+        self.log_area.insert(tk.END, message + "\n")
+        self.log_area.see(tk.END)
+        self.log_area.config(state="disabled")
+
+    def toggle_pause(self):
+        LogWindow.paused = not LogWindow.paused
+        if LogWindow.paused:
+            self.pause_button.config(text="▶ Resume Bot", bootstyle=SUCCESS)
+            print("⏸ Bot paused.")
+        else:
+            self.pause_button.config(text="⏸ Pause Bot", bootstyle=INFO)
+            print("▶ Bot resumed.")
+
     def quit(self):
-        print("🛑 Stopping bot")
-        UserGUI.should_run = False
+        print("🛑 Stopping bot...")
         self.window.destroy()
 
 
-# -------------------------
-# Main GUI
-# -------------------------
+# ==========================================================
+#                   MAIN SETUP WINDOW
+# ==========================================================
 class UserGUI:
-    should_run = False  # Class-level flag for bot state
+    should_run = False
 
     def __init__(self):
         self.root = tb.Window(themename="cosmo")
         self.root.title("🚀 Trading Bot Setup")
-        self.root.geometry("800x600")
+        self.root.geometry("700x650")
+        
+        self.userDataSample = {
+            'volume': 0.1,
+            'sl': 250,
+            'rr': '1:2',
+            'tp': {'LTF': '30M', 'HTF': '1H'},
+            "account_id": 308826480,
+            "password": "N3gus5@1111",
+            "server": "XMGlobal-MT5 6" 
+        }
 
         self.user_data = {}
         self.log_window = None
+        self._build_main_ui()
+        self._load_user_config()
 
-        self.setup_gui()
-
-    def setup_gui(self):
-        print('Setting up GUI.....')
+    # ----------------------------------------------------------
+    def _build_main_ui(self):
         main_frame = tb.Frame(self.root, padding=20)
         main_frame.pack(fill="both", expand=True)
 
         tb.Label(main_frame, text="Trading Bot Setup", font=("Segoe UI", 16, "bold")).pack(pady=(0, 15))
 
-        # Trading setup fields
         trading_frame = tb.Labelframe(main_frame, text="⚙️ Trading Setup", padding=10)
         trading_frame.pack(fill="x", pady=10)
 
@@ -203,106 +268,129 @@ class UserGUI:
         self.rr.current(2)
         self._add_field(trading_frame, "RR Ratio", self.rr)
 
-        timeframes = tb.Labelframe(trading_frame, text="Timeframes", padding=5)
+        timeframes = tb.Labelframe(trading_frame, text="Timeframes", width=10, padding=(10, 5))
         timeframes.pack(fill="x", pady=5)
-        self.tf_primary = tb.Combobox(timeframes, values=["1M", "5M", "15M", "30M", "1H", "4H", "1D", "1W", "1MN"], width=10)
-        self.tf_primary.current(3)  # default 30M
-        self.tf_primary.pack(side="left", padx=(0,5))
+        self.tf_primary = tb.Combobox(timeframes, values=["1M", "5M", "15M", "30M", "1H", "4H", "1D"], width=10)
+        self.tf_primary.current(3)
+        self.tf_primary.pack(side="left", padx=(0, 5))
+        self.tf_secondary = tb.Combobox(timeframes, values=["1M", "5M", "15M", "30M", "1H", "4H", "1D"], width=10)
+        self.tf_secondary.current(4)
+        self.tf_secondary.pack(side="left", padx=(0, 5))
 
-        self.tf_secondary = tb.Combobox(timeframes, values=["1M", "5M", "15M", "30M", "1H", "4H", "1D", "1W", "1MN"], width=10)
-        self.tf_secondary.current(4)  # default 1H
-        self.tf_secondary.pack(side="left", padx=(0,5))
-
-        # Account info
         account_frame = tb.Labelframe(main_frame, text="👤 Account Info", padding=10)
         account_frame.pack(fill="x", pady=10)
 
         self.server = tb.Entry(account_frame, width=25)
         self._add_field(account_frame, "Server", self.server)
-
         self.account_id = tb.Entry(account_frame, width=25)
         self._add_field(account_frame, "Account ID", self.account_id)
-
         self.password = tb.Entry(account_frame, show="●", width=25)
         self._add_field(account_frame, "Password", self.password)
 
-        # Buttons
+        # ✅ Remember Me
+        self.remember_me = tk.BooleanVar()
+        tb.Checkbutton(main_frame, text="Remember Me", variable=self.remember_me, bootstyle="info").pack(anchor="w", pady=(5, 10))
+
         btn_frame = tb.Frame(main_frame)
         btn_frame.pack(pady=15)
         tb.Button(btn_frame, text="▶ Run Bot", bootstyle=SUCCESS, command=self.start_bot).pack(side="left", padx=10)
         tb.Button(btn_frame, text="❌ Stop Bot", bootstyle=DANGER, command=self.stop_bot).pack(side="left", padx=10)
 
-        # Status
         self.status = tb.Label(self.root, text="Ready", bootstyle=INFO, anchor="w")
         self.status.pack(side="bottom", fill="x")
 
-    def _add_field(self, parent, label, widget):
+    def _add_field(self, parent, label, widget: tk.Widget):
         frame = tb.Frame(parent)
         frame.pack(fill="x", pady=5)
         tb.Label(frame, text=label, width=15, anchor="e").pack(side="left", padx=5)
         widget.pack(side="left", padx=5)
 
-    # -------------------------
-    # Bot control
-    # -------------------------
+    def validate_inputs(self):
+        try:  
+            volume = float(self.volume.get())
+            if volume <= 0:
+                raise ValueError("Volume must be positive.")
+            sl = int(self.sl.get())
+            if sl <= 0:
+                raise ValueError("SL Distance must be positive.")
+            rr = self.rr.get()
+            server = self.server.get().strip()
+            account_id = int(self.account_id.get().strip())
+            password = self.password.get().strip()
+            if not server or not password:
+                raise ValueError("Server and Password cannot be empty.")
+            
+            
+
+            self.user_data = {
+                "volume": volume,
+                "sl_distance": sl,
+                "rr_ratio": rr,
+                "tf_primary": self.tf_primary.get(),
+                "tf_secondary": self.tf_secondary.get(),
+                "server": server,
+                "account_id": account_id,
+                "password": password,
+            }
+            return True
+        except Exception as e:
+            messagebox.showerror("Input Error", str(e))
+            return
+        
+    # ----------------------------------------------------------
+    # Remember Me Logic
+    # ----------------------------------------------------------
+    def _load_user_config(self):
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, "r") as f:
+                    config = json.load(f)
+                self.server.insert(0, config.get("server", ""))
+                self.account_id.insert(0, config.get("account_id", ""))
+                self.password.insert(0, config.get("password", ""))
+                self.remember_me.set(True)
+            except Exception as e:
+                print(f"⚠ Failed to load config: {e}")
+
+    def _save_user_config(self):
+        if self.remember_me.get():
+            data = {
+                "server": self.server.get(),
+                "account_id": self.account_id.get(),
+                "password": self.password.get(),
+            }
+            with open(CONFIG_FILE, "w") as f:
+                json.dump(data, f)
+        elif os.path.exists(CONFIG_FILE):
+            os.remove(CONFIG_FILE)
+    # ----------------------------------------------------------
+    # Bot Logic
+    # ----------------------------------------------------------
     def start_bot(self):
-        # Validations
-        if not self.account_id.get().isdigit():
-            messagebox.showerror("Error", "Account ID must be numeric")
-            return None
-        if not self.server.get().strip() or not self.volume.get().strip():
-            messagebox.showerror("Input Error", "Server and Volume are required.")
-            return None
-        if not self.account_id.get().strip().isdigit() or len(self.account_id.get().strip()) < 5:
-            messagebox.showerror("Input Error", "Valid Account ID is required.")
-            return None
-        if not self.password.get().strip() or not (8 <= len(self.password.get().strip()) <= 16):
-            messagebox.showerror("Input Error", "Password must be 8–16 characters.")
-            return None
-
-
-        self.user_data = {
-            "volume": float(self.volume.get().strip()),
-            "sl": int(self.sl.get().strip()),
-            "rr": self.rr.get().strip(),
-            "tf":{
-                "LTF": self.tf_primary.get().strip(),
-                "HTF": self.tf_secondary.get().strip()
-            },
-            "server": self.server.get().strip(),
-            "account_id": self.account_id.get().strip(),
-            "password": self.password.get().strip()
-        }
-
-        self.status.config(text="🚀 Bot Running...")
-        self.root.withdraw()  # Hide main window
+        if not self.validate_inputs():
+            return
+        print("🚀 Starting bot...")
+        self.root.withdraw()
         UserGUI.should_run = True
-
-        # # Redirect stdout/stderr to log window
-        # import sys
-        # sys.stdout = self.log_window.redirector
-        # sys.stderr = self.log_window.redirector
-        return self.user_data
+        self.status.config(text="🚀 Bot Running...")
+        self.log_window = LogWindow(self.root)
+        sys.stdout = self.log_window.redirector
+        sys.stderr = self.log_window.redirector
 
     def stop_bot(self):
         UserGUI.should_run = False
         self.status.config(text="🛑 Bot Stopped")
         print("🛑 Bot stopped manually")
+        if self.log_window:
+            self.log_window.quit()
+        self.root.deiconify()
+        mt5Client.MetaTrader5Client._shut_down_bot()
+        self._save_user_config()
 
-    def bot_worker(self):
-        # Example bot logic
-        for i in range(1, 21):
-            if not UserGUI.should_run:
-                print("🛑 Bot stopped")
-                break
-            # print(f"📈 Bot beat {i}")
-            time.sleep(0.5)
-        else:
-            print("✅ Bot finished")
-        self.status.config(text="Ready")
 
-# # -------------------------
-# # Run
-# # -------------------------
+# # ==========================================================
+# #                      RUN GUI
+# # ==========================================================
 # if __name__ == "__main__":
-#     UserGUI()
+#     app = UserGUI()
+#     app.root.mainloop()

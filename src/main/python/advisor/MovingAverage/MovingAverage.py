@@ -15,8 +15,6 @@ class MovingAverageCrossover:
         :param fast_period: Period for the fast-moving average.
         :param slow_period: Period for the slow-moving average.
         """
-        ltf_data = data['LTF']
-        htf_data = data['HTF']
         self.entries = None
         self.fast_period = fast_period
         self.slow_period = slow_period
@@ -163,6 +161,7 @@ class MovingAverageCrossover:
                         if future_price >= sl:
                             outcome = "Loss"
                             exit_price = sl
+                            actual_Loss = exit_price - entry_price
                             break
                         elif future_price <= tp:
                             outcome = "Win"
@@ -179,7 +178,19 @@ class MovingAverageCrossover:
                     "Outcome": outcome,
                     "Risk": abs(entry_price - sl),
                     "Reward": abs(tp - entry_price),
-                    "RRR": abs(tp - entry_price) / abs(entry_price - sl) if sl != entry_price else None
+                    "RRR": abs(tp - entry_price) / abs(entry_price - sl) if sl != entry_price else None,
+                    # ✅ Profit / Loss in pips
+                    
+                    
+                    "PnL_Pips": (
+                        (exit_price - entry_price) / pip_size if entry_type == "Buy" else 
+                        (entry_price - exit_price) / pip_size
+                    ) if exit_price else 0,
+                    # ✅ Profit / Loss in % (relative to entry)
+                    "PnL_%": (
+                        ((exit_price - entry_price) / entry_price) * 100 if entry_type == "Buy" else 
+                        ((entry_price - exit_price) / entry_price) * 100
+                    ) if exit_price else 0
                 })
 
         self.results = pd.DataFrame(trades)
