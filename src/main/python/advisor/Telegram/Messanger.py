@@ -26,13 +26,18 @@ class TelegramMessenger:
         if not self.BOT_TOKEN:
             raise ValueError("❌ TELEGRAM_BOT_TOKEN not found in .env file")
 
-           
+        self.bot = None
+        self.stop_callback = None      
         self.chat_id = chat_id
         self.should_run = True  # 🔁 Flag to control bot execution
         
     def run_bot_async(self):
         threading.Thread(target=self.run_bot, daemon=True).start()
         
+    def set_stop_callback(self, callback):
+        """Allow external class to stop bot via Telegram command."""
+        self.stop_callback = callback
+
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = update.effective_chat.id
         self.chat_id = chat_id
@@ -42,13 +47,25 @@ class TelegramMessenger:
     async def stop(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         self.should_run = False
         await context.bot.send_message(chat_id=update.effective_chat.id, text="🛑 Advisor stopped by user.")
+        if self.stop_callback:
+            self.stop_callback()
 
     async def status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if self.should_run:
-            await context.bot.send_message(chat_id=update.effective_chat.id, text="✅ Advisor is running.")
-        else:
-            await context.bot.send_message(chat_id=update.effective_chat.id, text="🛑 Advisor is stopped.")
-            
+        '''Check the status of trading account, Profit/Loss, balance, etc.'''
+        if not self.chat_id:
+            await context.bot.send_message(chat_id=update.effective_chat.id, text="❌ Chat ID not set. Use /start first.")
+            return
+
+        # Here you would implement the logic to check the status of the trading account
+        # For example, you could retrieve account information and send it to the user
+        account_info = self.get_account_info()
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=f"📊 Account Status:\n{account_info}")
+
+    def get_account_info(self): 
+        # Placeholder for actual account info retrieval logic
+        # Replace this with real data fetching from your trading platform
+        return {"Balance": "$10,000", "Profit/Loss": "$500", "Open Trades": 2}
+    
     def run_bot(self):
         """
         Starts the Telegram bot and waits for commands.
@@ -58,7 +75,7 @@ class TelegramMessenger:
 
         app = Application.builder().token(self.BOT_TOKEN).build()
         app.add_handler(CommandHandler("start", self.start))
-        app.add_handler(CommandHandler("stop", self.stop))  # 🆕 Add stop command
+        app.add_handler(CommandHandler("stop", self.stop))  
         app.add_handler(CommandHandler("status", self.status))  # 🆕 Add status command
 
         print("🤖 Bot is running. Use /start to begin and /stop to stop the advisor.")

@@ -54,9 +54,9 @@ class LogWindow:
 
     def __init__(self, master: tb.Window):
         # --- Window ---
-        self.window = tk.Toplevel(master)
+        self.window = tk.Toplevel(master) if master else tk.Window()
         self.window.title("📢 Trading Advisor Bot — Running")
-        self.window.geometry("1400x800")
+        self.window.geometry("1440x840")
 
         self.queue = queue.Queue()
         self._build_main_layout()
@@ -220,6 +220,12 @@ class LogWindow:
     def quit(self):
         print("🛑 Stopping bot...")
         self.window.destroy()
+        if hasattr(self, "stop_callback"):
+            self.stop_callback()
+
+    def set_stop_callback(self, callback):
+        """Allow main bot to inject a function to stop everything."""
+        self.stop_callback = callback
 
 
 # ==========================================================
@@ -247,6 +253,12 @@ class UserGUI:
         self.log_window = None
         self._build_main_ui()
         self._load_user_config()
+        
+    def pop_up_error(self, message: str):
+        messagebox.showerror("Input Error", message)
+        
+    def prompt_window(self, message: str):
+        return messagebox.askyesno("Confirmation", message)
 
     # ----------------------------------------------------------
     def _build_main_ui(self):
@@ -379,18 +391,17 @@ class UserGUI:
 
     def stop_bot(self):
         UserGUI.should_run = False
-        self.status.config(text="🛑 Bot Stopped")
-        print("🛑 Bot stopped manually")
-        if self.log_window:
-            self.log_window.quit()
-        self.root.deiconify()
-        mt5Client.MetaTrader5Client._shut_down_bot()
+        self.status.config(text="🛑 Bot Stopped", state='disabled')
+        self.should_run = False  # GUI flag update
+        
+        if hasattr(self, "stop_callback"):
+            self.stop_callback()  # call linked stop function from RunAdvisorBot
+            
         self._save_user_config()
+        self.root.destroy()
+        
+    def set_stop_callback(self, callback):
+        """Allow main bot to inject a function to stop everything."""
+        self.stop_callback = callback
 
 
-# # ==========================================================
-# #                      RUN GUI
-# # ==========================================================
-# if __name__ == "__main__":
-#     app = UserGUI()
-#     app.root.mainloop()

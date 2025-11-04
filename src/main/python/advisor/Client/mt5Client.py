@@ -60,13 +60,13 @@ class MetaTrader5Client:
                     print("initialize() failed, error code =", mt5.last_error())
                     messagebox.showerror("Login Error", "Failed to connect to MetaTrader 5.")
                     mt5.shutdown()
-                    return False
+                    return [False, []]
                 
             else:
                 if not mt5.initialize():
                     print("initialize() failed, error code =", mt5.last_error())
                     mt5.shutdown()
-                    return False
+                    return [False, []]
 
         finally:        
             print("🚀 Bot is ready to start trading!")
@@ -189,21 +189,9 @@ class MetaTrader5Client:
     def close(self):
         """ Close the MT5 connection.
         """
-        try:
-            mt5.shutdown()
-            print("🔌 Disconnected from MetaTrader 5.")
-            return False
-        except Exception as e:
-            print(f"❌ Error during shutdown: {e}")
-            return True
-        
-    def _shut_down_bot(self):
-        '''shut down MT5 connection and exit the bot'''
-        try:
-            self.close()
-        finally:
-            print("🔌 Disconnected from MetaTrader 5. Exiting bot...")
-            sys.exit(0)
+        mt5.shutdown()
+        print("🔌 Disconnected from MetaTrader 5.")
+        return False
 
 class dataHandler:
     def save_trade(self, trade_data, file_type="json"):

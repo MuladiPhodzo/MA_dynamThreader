@@ -7,46 +7,60 @@ else
 	RM = rm -rf
 endif
 
-# Run tests
+# Variables
+PYTEST_FLAGS = -v --disable-warnings --asyncio-mode=auto
+COV_FLAGS = --cov=src/main/python/advisor --cov-report=term-missing --cov-report=html
+
+# ------------------------------
+# Run Tests
+# ------------------------------
 test:
-	$(PYTHONPATH_SET) pytest -v --disable-warnings
+	$(PYTHONPATH_SET) pytest $(PYTEST_FLAGS)
 
-# Clean build artifacts (pyc, cache, dist, build)
+# ------------------------------
+# Run Tests with Coverage
+# ------------------------------
+coverage:
+	$(PYTHONPATH_SET) pytest $(PYTEST_FLAGS) $(COV_FLAGS)
+	@echo "📊 Coverage report available in 'htmlcov/index.html'"
+
+# ------------------------------
+# Clean Build Artifacts
+# ------------------------------
 clean:
-	-$(RM) build dist __pycache__ .pytest_cache *.spec
+	-$(RM) build dist __pycache__ .pytest_cache *.spec htmlcov .coverage
+	find . -type d -name "__pycache__" -exec $(RM) {} + || true
 
-# Format code using black
+# ------------------------------
+# Code Quality
+# ------------------------------
 format:
 	black src/ tests
 
-# Lint with flake8 (or pylint if you prefer)
 lint:
 	flake8 src tests
 
-# Type checking with mypy
 typecheck:
 	mypy src
 
-# Build standalone executable with pyinstaller
+# ------------------------------
+# Build and Packaging
+# ------------------------------
 build: clean test
 	pyinstaller MA_DynamAdvisor.spec
 
-# Run the bot directly (useful for dev without rebuilding)
 run:
 	python src/main/python/advisor/MA_DynamAdvisor.py
 
-# Install dependencies
 install:
 	pip install -r requirements.txt
 
-# Update dependencies (pip-tools recommended if you use it)
 update-deps:
 	pip install --upgrade -r requirements.txt
 
-# Package zip for distribution (e.g. for testers)
 package: build
-	cd dist && zip -r MA_DynamAdvisort.zip RMA_DynamAdvisor.exe README.md
+	cd dist && zip -r MA_DynamAdvisor.zip MA_DynamAdvisor.exe README.md
 
-# Full pipeline: test -> lint -> build -> package
 release: lint test build package
 	@echo "🚀 Release build completed!"
+
