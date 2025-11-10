@@ -4,6 +4,7 @@ import datetime as dt
 from advisor.Telegram import Messanger
 from advisor.Client import mt5Client
 
+
 class MT5TradingAlgorithm:
     def __init__(self, symbol, telegram: Messanger.TelegramMessenger, user_data, magic_number=8000):
         """
@@ -35,7 +36,8 @@ class MT5TradingAlgorithm:
         """
         try:
             if action not in ["buy", "sell"]:
-                raise ValueError(f"Invalid action '{action}', must be 'buy' or 'sell'.")
+                raise ValueError(
+                    f"Invalid action '{action}', must be 'buy' or 'sell'.")
 
             symbol_info = mt5.symbol_info(self.symbol)
             if symbol_info is None:
@@ -76,14 +78,11 @@ class MT5TradingAlgorithm:
                 "type_filling": mt5.ORDER_FILLING_IOC,
             }
 
-            result = None
-            
             return self.executeTrade(request, symbol_info, action, price)
-                
+
         except Exception as e:
             print(f"❌ Error placing order: {e}")
             return False
-        
 
     def run_Trades(self, market_bias, ltf_Bias: pd.DataFrame, latest, current_price, THRESHOLD, symbol):
         """ Execute trading logic based on market and LTF bias.
@@ -92,14 +91,15 @@ class MT5TradingAlgorithm:
         :param latest: Latest data containing indicators.
         :param current_price: Current market price.
         :param THRESHOLD: Acceptable range threshold."""
-        
+
         try:
             ltf_latest = latest.copy()
             diff = abs(current_price - ltf_latest["Fast_MA"])
             in_range = diff <= THRESHOLD
             ltf_latest["Range"] = in_range
 
-            print(f"📌 Decision {symbol}: Market Bias={market_bias}, LTF Bias={ltf_Bias}, In Range={in_range}")
+            print(
+                f"📌 Decision {symbol}: Market Bias={market_bias}, LTF Bias={ltf_Bias}, In Range={in_range}")
 
             if not in_range:
                 print(f"{symbol} - No valid entry signal.")
@@ -125,7 +125,6 @@ class MT5TradingAlgorithm:
             return False
 
     def Load_TradesHistory(self, days=1):
-        
         """
         Check for closed trades in the last N days for this strategy (magic number).
         Returns a DataFrame with profit/loss.
@@ -141,63 +140,75 @@ class MT5TradingAlgorithm:
                 return pd.DataFrame()
 
             # Convert to DataFrame
-            deals_df = pd.DataFrame(list(deals), columns=deals[0]._asdict().keys())
+            deals_df = pd.DataFrame(
+                list(deals), columns=deals[0]._asdict().keys())
             if deals_df.empty:
                 print("⚠️ No closed trades in this period.")
                 return deals_df
 
             # Filter only this strategy's trades (by magic number and symbol)
-            deals_df = pd.DataFrame(deals_df[(deals_df["magic"] == self.magic_number) & (deals_df["symbol"] == self.symbol)])
+            deals_df = pd.DataFrame(deals_df[(deals_df["magic"] == self.magic_number) & (
+                deals_df["symbol"] == self.symbol)])
 
             if deals_df.empty:
                 print("⚠️ No closed trades for this strategy.")
                 return deals_df
 
             # Mark trades as Profit or Loss
-            deals_df["P/L"] = deals_df["profit"].apply(lambda p: "Profit" if p > 0 else "Loss" if p < 0 else "BreakEven")
+            deals_df["P/L"] = deals_df["profit"].apply(
+                lambda p: "Profit" if p > 0 else "Loss" if p < 0 else "BreakEven")
 
             # Print summary
             print("📊 Closed Trades Summary:")
             for _, row in deals_df.iterrows():
-                print(f"  {row['symbol']} | Ticket: {row['ticket']} | Profit: {row['profit']} | {row['Result']}")
+                print(
+                    f"  {row['symbol']} | Ticket: {row['ticket']} | Profit: {row['profit']} | {row['Result']}")
 
             return deals_df
 
         except Exception as e:
             print(f"❌ Error fetching closed trades: {e}")
             return pd.DataFrame()
-        
+
     def executeTrade(self, request, symbol_info, action, price):
         try:
             # Send order
-            while ( False not in self.opened):
+            while (False not in self.opened):
                 if symbol_info.trade_mode == 0:
                     result = mt5.order_send(request)
                     if result is None:
-                        print("❌ mt5.order_send() returned None — check if MetaTrader is initialized and logged in.")
+                        print(
+                            "❌ mt5.order_send() returned None — check if MetaTrader is initialized and logged in.")
 
                     if result.retcode != mt5.TRADE_RETCODE_DONE:
                         print(f"❌ Order failed: {result.retcode}")
-                    
+
                     else:
-                        print(f"✅ {action.capitalize()} order placed at {price}. Retcode: {result.retcode}")
-                        self.telegram.send_message(f"🟢Placed {action} {self.symbol} @ {request['price']} | TP: {request['tp']} | SL: {request['sl']}\n NB: use proper risk management")
-                    
+                        print(
+                            f"✅ {action.capitalize()} order placed at {price}. Retcode: {result.retcode}")
+                        self.telegram.send_message(
+                            f"🟢Placed {action} {self.symbol} @ {request['price']} | TP: {request['tp']} | SL: {request['sl']}\n NB: use proper risk management")
+
                         self.TradesData.add(request)
-                        self.TradesData = self.TradesData.drop(columns=['type_time', 'comment', 'type_filling', 'deviation'])
+                        self.TradesData = self.TradesData.drop(
+                            columns=['type_time', 'comment', 'type_filling', 'deviation'])
                         self.current_position = action
                         self.openTrades += 1
                         self.opened[self.openTrades] = True
-                        print(f"🟢 {self.symbol} Placing{str(action).upper()} order...")
+                        print(
+                            f"🟢 {self.symbol} Placing{str(action).upper()} order...")
                         return True, request
-                    
+
         except Exception as e:
             raise Exception(f"❌ Error executing trade: {e}")
-        
+
         finally:
-            print(f'sending Telegram: {self.symbol} {action} signal via telegram...')
-            self.telegram.send_message(f"🟢 {action} {self.symbol} | TP: {request['tp']} | SL: {request['sl']}\n NB: use proper risk management")
-            mt5Client.dataHandler._toCSV("Trade/trades_log.csv", request, dt.datetime.now().strftime("%Y-%m-%d %H:%M"))
+            print(
+                f'sending Telegram: {self.symbol} {action} signal via telegram...')
+            self.telegram.send_message(
+                f"🟢 {action} {self.symbol} | TP: {request['tp']} | SL: {request['sl']}\n NB: use proper risk management")
+            mt5Client.dataHandler._toCSV(
+                "Trade/trades_log.csv", request, dt.datetime.now().strftime("%Y-%m-%d %H:%M"))
             self.TradesData.add(request)
-            
+
             return True

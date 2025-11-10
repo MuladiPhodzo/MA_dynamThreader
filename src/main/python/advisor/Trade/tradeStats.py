@@ -1,4 +1,6 @@
 import pandas as pd
+
+
 class TradeStats:
     def __init__(self, trade_data: pd.DataFrame = None):
         self.total_trades = 0
@@ -22,7 +24,7 @@ class TradeStats:
         else:
             self.failed_trades += 1
             self.total_loss += abs(profit_loss)
-            
+
     def get_summary(self):
         return {
             "Total Trades": self.total_trades,
@@ -32,7 +34,7 @@ class TradeStats:
             "Total Loss": self.total_loss,
             "Success Rate": (self.successful_trades / self.total_trades * 100) if self.total_trades > 0 else 0.0
         }
-        
+
     def calculate_average_profit(self, avg_trade: int, period: int):
         if self.total_trades == 0:
             return 0.0
@@ -41,22 +43,22 @@ class TradeStats:
 
     def calculate_average_weekly_profit(self):
         return self.calculate_average_profit(10, 7)
-    
+
     def calculate_average_monthly_profit(self):
         return self.calculate_average_profit(40, 30)
-    
+
     def calculate_max_drawDown(self):
         # Placeholder for max drawdown calculation
         return 0.0
-    
+
     def calculate_sharpe_ratio(self, risk_free_rate=0.01):
         # Placeholder for Sharpe ratio calculation
         return 0.0
-    
+
     def calculate_sortino_ratio(self, risk_free_rate=0.01):
         # Placeholder for Sortino ratio calculation
         return 0.0
-    
+
     def calculate_profit_factor(self):
         if self.total_loss == 0:
             return float('inf')  # Infinite profit factor if no losses

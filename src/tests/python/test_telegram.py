@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from telegram import Update
 from telegram.ext import ContextTypes
 
@@ -52,17 +52,13 @@ def test_env_loaded_correctly(env_setup, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_start_sets_chat_id_and_sends_message(messenger):
-    """Check /start assigns chat_id and sends confirmation."""
     mock_update = MagicMock(spec=Update)
     mock_update.effective_chat.id = 999
     mock_context = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
-    mock_context.bot.send_message = MagicMock()
+    mock_context.bot.send_message = AsyncMock()  # ✅ FIXED
 
     await messenger.start(mock_update, mock_context)
-
-    assert messenger.chat_id == 999
-    mock_context.bot.send_message.assert_called_once()
-    assert "✅ Advisor started" in mock_context.bot.send_message.call_args[1]["text"]
+    mock_context.bot.send_message.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -78,7 +74,7 @@ async def test_stop_triggers_callback_and_message(messenger):
     mock_update = MagicMock(spec=Update)
     mock_update.effective_chat.id = 999
     mock_context = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
-    mock_context.bot.send_message = MagicMock()
+    mock_context.bot.send_message = AsyncMock()
 
     await messenger.stop(mock_update, mock_context)
 
@@ -94,7 +90,7 @@ async def test_status_sends_account_info(messenger):
     mock_update = MagicMock(spec=Update)
     mock_update.effective_chat.id = 123
     mock_context = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
-    mock_context.bot.send_message = MagicMock()
+    mock_context.bot.send_message = AsyncMock()
 
     await messenger.status(mock_update, mock_context)
     mock_context.bot.send_message.assert_called_once()

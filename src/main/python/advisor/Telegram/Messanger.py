@@ -1,12 +1,14 @@
 from dotenv import load_dotenv
-import os, threading, asyncio
+import os
+import sys
+from pathlib import Path
+import threading
+import asyncio
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram import Update
-import requests, sys
+import requests
 
-from pathlib import Path
-from dotenv import load_dotenv
-import os, sys
+from Telegram.utils import logger
 
 class TelegramMessenger:
     def __init__(self, chat_id=None):
@@ -27,13 +29,13 @@ class TelegramMessenger:
             raise ValueError("❌ TELEGRAM_BOT_TOKEN not found in .env file")
 
         self.bot = None
-        self.stop_callback = None      
+        self.stop_callback = None
         self.chat_id = chat_id
         self.should_run = True  # 🔁 Flag to control bot execution
-        
+
     def run_bot_async(self):
         threading.Thread(target=self.run_bot, daemon=True).start()
-        
+
     def set_stop_callback(self, callback):
         """Allow external class to stop bot via Telegram command."""
         self.stop_callback = callback
@@ -60,28 +62,7 @@ class TelegramMessenger:
         # For example, you could retrieve account information and send it to the user
         account_info = self.get_account_info()
         await context.bot.send_message(chat_id=update.effective_chat.id, text=f"📊 Account Status:\n{account_info}")
-
-    def get_account_info(self): 
-        # Placeholder for actual account info retrieval logic
-        # Replace this with real data fetching from your trading platform
-        return {"Balance": "$10,000", "Profit/Loss": "$500", "Open Trades": 2}
-    
-    def run_bot(self):
-        """
-        Starts the Telegram bot and waits for commands.
-        """
-        asyncio.set_event_loop(asyncio.new_event_loop())  # 🧠 create and set event loop in thread
-        loop = asyncio.get_event_loop()
-
-        app = Application.builder().token(self.BOT_TOKEN).build()
-        app.add_handler(CommandHandler("start", self.start))
-        app.add_handler(CommandHandler("stop", self.stop))  
-        app.add_handler(CommandHandler("status", self.status))  # 🆕 Add status command
-
-        print("🤖 Bot is running. Use /start to begin and /stop to stop the advisor.")
-        loop.run_until_complete(app.run_polling())  # 🧠 run polling in the new loop
-
-
+        
     def send_message(self, message):
         if not self.chat_id:
             print("❌ Chat ID not set. Use /start on your bot first.")
@@ -99,6 +80,30 @@ class TelegramMessenger:
             if response.status_code == 200:
                 print("✅ Message sent successfully")
             else:
-                print(f"❌ Failed to send message: {response.status_code} - {response.text}")
+                print(
+                    f"❌ Failed to send message: {response.status_code} - {response.text}")
         except Exception as e:
             print(f"❌ Exception occurred while sending message: {e}")
+
+
+    def get_account_info(self):
+        # Placeholder for actual account info retrieval logic
+        # Replace this with real data fetching from your trading platform
+        return {"Balance": "$10,000", "Profit/Loss": "$500", "Open Trades": 2}
+
+    def run_bot(self):
+        """
+        Starts the Telegram bot and waits for commands.
+        """
+        asyncio.set_event_loop(asyncio.new_event_loop())  # 🧠 create and set event loop in thread
+        loop = asyncio.get_event_loop()
+
+        app = Application.builder().token(self.BOT_TOKEN).build()
+        app.add_handler(CommandHandler("start", self.start))
+        app.add_handler(CommandHandler("stop", self.stop))
+        app.add_handler(CommandHandler("status", self.status))
+
+        print("🤖 Bot is running. Use /start to begin and /stop to stop the advisor.")
+        # 🧠 run polling in the new loop
+        loop.run_until_complete(app.run_polling())
+

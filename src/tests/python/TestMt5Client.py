@@ -1,7 +1,6 @@
 import unittest
 from unittest.mock import patch, MagicMock, mock_open
 import pandas as pd
-import os
 
 from advisor.Client.mt5Client import MetaTrader5Client, dataHandler, DataPlotter
 
@@ -63,7 +62,8 @@ class TestDataHandler(unittest.TestCase):
         handler = dataHandler()
         df = pd.DataFrame({"a": [1, 2]})
         handler.toCSV(df, "test.csv")
-        mock_csv.assert_called_once_with("test.csv", index=False, mode="a", header=False)
+        mock_csv.assert_called_once_with(
+            "test.csv", index=False, mode="a", header=False)
 
     @patch("advisor.Client.mt5Client.os.path.isfile", return_value=False)
     @patch("builtins.open", new_callable=mock_open)
@@ -101,7 +101,8 @@ class TestDataPlotter(unittest.TestCase):
             "Slow_MA": [1, 2, 3, 4],
             "Crossover": [0, 2, -2, 0],
         }, index=pd.date_range("2023-01-01", periods=4))
-        DataPlotter.plot_charts(df, entries=None, fast_period=5, slow_period=10)
+        DataPlotter.plot_charts(
+            df, entries=None, fast_period=5, slow_period=10)
         mock_show.assert_called_once()
 
     def test_plot_charts_missing_column(self):

@@ -38,7 +38,9 @@ format:
 	black src/ tests
 
 lint:
-	flake8 src tests
+	python -m flake8 src tests
+
+
 
 typecheck:
 	mypy src
@@ -48,6 +50,9 @@ typecheck:
 # ------------------------------
 build: clean test
 	pyinstaller MA_DynamAdvisor.spec
+
+env:
+	powershell -ExecutionPolicy Bypass -File venv\Scripts\Activate.ps1 
 
 run:
 	python src/main/python/advisor/MA_DynamAdvisor.py

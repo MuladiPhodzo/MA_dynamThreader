@@ -16,19 +16,20 @@ class TestMovingAverages(unittest.TestCase):
         cls.user_data = {
             "account_id": 308826480,
             "password": "N3gus5@1111",
-            "server": "XMGlobal-MT5 6" 
+            "server": "XMGlobal-MT5 6"
         }
-        
+
         cls.client = Client()
         initialized = cls.client.initialize(cls.user_data)
-        
+
         if not initialized:
             raise RuntimeError("Failed to initialize MetaTrader5 client")
 
         cls.data = cls.client.get_live_data(cls.symbol, cls.timeframe)
 
         if cls.data is None or cls.data.empty:
-            raise RuntimeError("Failed to fetch live data for testing MovingAverages")
+            raise RuntimeError(
+                "Failed to fetch live data for testing MovingAverages")
 
     def setUp(self):
         """Create a fresh MovingAverageCrossover instance for each test"""
@@ -39,10 +40,12 @@ class TestMovingAverages(unittest.TestCase):
 
         self.assertIsNotNone(averages_data, "Averages data should not be None")
         self.assertIsInstance(averages_data, pd.DataFrame)
-        self.assertFalse(averages_data.empty, "Averages data should not be empty")
+        self.assertFalse(averages_data.empty,
+                         "Averages data should not be empty")
 
         # Required columns
-        expected_columns = {"Fast_MA", "Slow_MA", "Crossover", "Bias", "Signal"}
+        expected_columns = {"Fast_MA", "Slow_MA",
+                            "Crossover", "Bias", "Signal"}
         self.assertTrue(expected_columns.issubset(averages_data.columns))
 
     # def test_backtest(self):
@@ -77,7 +80,8 @@ class TestMovingAverages(unittest.TestCase):
         bad_client = Client("INVALID")
         data = bad_client.get_live_data("INVALID", self.timeframe)
 
-        self.assertTrue(data is None or data.empty, "Invalid symbol should return None or empty DataFrame")
+        self.assertTrue(data is None or data.empty,
+                        "Invalid symbol should return None or empty DataFrame")
 
 
 if __name__ == "__main__":

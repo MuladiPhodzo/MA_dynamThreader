@@ -13,7 +13,7 @@ class TestAdvisor(unittest.TestCase):
         cls.user_data = {
             "account_id": 308826480,
             "password": "N3gus5@1111",
-            "server": "XMGlobal-MT5 6" 
+            "server": "XMGlobal-MT5 6"
         }
         cls.client = Client()
         initialized = cls.client.initialize(cls.user_data)
@@ -24,7 +24,6 @@ class TestAdvisor(unittest.TestCase):
     def tearDownClass(cls):
         """Run once after all tests"""
         cls.client.close()
-
 
     def test_symbol_availability(self):
         availability = self.client.check_symbols_availability()
@@ -52,7 +51,8 @@ class TestAdvisor(unittest.TestCase):
         """Check handling of invalid symbol requests"""
         timeframe = mt5.TIMEFRAME_H1
         data = self.client.get_live_data("INVALID", timeframe)
-        self.assertTrue(data is None or data.empty, "Invalid symbol should return None or empty DataFrame")
+        self.assertTrue(data is None or data.empty,
+                        "Invalid symbol should return None or empty DataFrame")
 
     def test_account_info(self):
         """Optional: test account details retrieval"""
@@ -60,9 +60,12 @@ class TestAdvisor(unittest.TestCase):
         self.assertIsNotNone(info, "Account info should not be None")
 
         # Check expected attributes exist
-        self.assertTrue(hasattr(info, "balance"), "AccountInfo should have balance")
-        self.assertTrue(hasattr(info, "equity"), "AccountInfo should have equity")
-        self.assertTrue(hasattr(info, "margin_free"), "AccountInfo should have margin_free")
+        self.assertTrue(hasattr(info, "balance"),
+                        "AccountInfo should have balance")
+        self.assertTrue(hasattr(info, "equity"),
+                        "AccountInfo should have equity")
+        self.assertTrue(hasattr(info, "margin_free"),
+                        "AccountInfo should have margin_free")
 
         # Optional: assert types
         self.assertIsInstance(info.balance, float)

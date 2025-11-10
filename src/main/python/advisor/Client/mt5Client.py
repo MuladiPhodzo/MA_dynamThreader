@@ -1,55 +1,65 @@
+from dateutil.relativedelta import relativedelta
+import os
+import datetime
+import csv
+import json
+
 import matplotlib.pyplot as plt
 from tkinter import messagebox
 import pandas as pd
 from pandas.plotting import register_matplotlib_converters
 import MetaTrader5 as mt5
 
-from dateutil.relativedelta import relativedelta
-import datetime
-import os
-import sys
-
-import json
-import csv
-
-
-
 register_matplotlib_converters()
 
 
 class MetaTrader5Client:
-    def __init__(self,  
-                timeframes = None
-            ):
+    def __init__(self, timeframes=None):
         self.symbols = []
         self.THRESHOLD = 0.0100
         self.account_info = None
         self.terminal_info = None
         self.TF = {}
-        self._configTF(timeframes) if timeframes else self._configTF(['30M', '2H'])
-        
+        if timeframes:
+            self._configTF(timeframes)
+        else:
+            self._configTF(['30M', '2H'])
+
     def _configTF(self, timeframes):
         try:
-            TF_dict = {'1M': mt5.TIMEFRAME_M1, '15M': mt5.TIMEFRAME_M15, '30M': mt5.TIMEFRAME_M30, '1H': mt5.TIMEFRAME_H1, '2H': mt5.TIMEFRAME_H2, '4H': mt5.TIMEFRAME_H4, '1D': mt5.TIMEFRAME_D1, '1W': mt5.TIMEFRAME_W1 }
+            TF_dict = {
+                '1M': mt5.TIMEFRAME_M1,
+                '15M': mt5.TIMEFRAME_M15,
+                '30M': mt5.TIMEFRAME_M30,
+                '1H': mt5.TIMEFRAME_H1,
+                '2H': mt5.TIMEFRAME_H2,
+                '4H': mt5.TIMEFRAME_H4,
+                '1D': mt5.TIMEFRAME_D1,
+                '1W': mt5.TIMEFRAME_W1
+            }
             self.TF['LTF'] = TF_dict[timeframes[0]]
             self.TF['HTF'] = TF_dict[timeframes[1]]
         except KeyError as e:
-            print(f"❌ Invalid timeframe provided: {e}. Using default timeframes 30M and 2H.")
+            print(
+                f"❌ Invalid timeframe provided: {e}. Using default timeframes 30M and 2H.")
             self.TF['LTF'] = TF_dict['30M']
             self.TF['HTF'] = TF_dict['2H']
 
     def logIn(self, user_data):
         print("🔑 Logging in to MetaTrader 5...")
-        
+
         res = self.initialize(user_data)
-        
+
         if not res[0]:
-            messagebox.showerror("Connection failed", f"Failed to log in with error code ={ mt5.last_error()}")
-            print(f"failed to log in with error code ={ mt5.last_error()}")
+            messagebox.showerror(
+                "Connection failed", f"Failed to log in with error code ={mt5.last_error()}")
+            print(f"failed to log in with error code ={mt5.last_error()}")
             mt5.shutdown()
             return False
-        messagebox.showinfo("Login successful", "Connecting to MetaTrader 5....")
-        print(f"✅ Successfully connected to MT5 account {user_data['account_id']} on server '{user_data['server']}'")
+        messagebox.showinfo("Login successful",
+                            "Connecting to MetaTrader 5....")
+        print(
+            f"✅ Successfully connected to MT5 account {user_data['account_id']} on server '{user_data['server']}'")
         return res
 
     def initialize(self, user_data):
@@ -58,27 +68,27 @@ class MetaTrader5Client:
                 print("Initializing MetaTrader 5 with user data...")
                 if not mt5.initialize(login=int(user_data['account_id']), password=user_data['password'], server=user_data['server']):
                     print("initialize() failed, error code =", mt5.last_error())
-                    messagebox.showerror("Login Error", "Failed to connect to MetaTrader 5.")
+                    messagebox.showerror(
+                        "Login Error", "Failed to connect to MetaTrader 5.")
                     mt5.shutdown()
                     return [False, []]
-                
+
             else:
                 if not mt5.initialize():
                     print("initialize() failed, error code =", mt5.last_error())
                     mt5.shutdown()
                     return [False, []]
 
-        finally:        
+        finally:
             print("🚀 Bot is ready to start trading!")
             self.account_info = mt5.account_info()
             self.terminal_info = mt5.terminal_info()
-            
+
             print('searching for available symbols...')
             symbols = self.get_Symbols()
 
             return [True, symbols]
-        
-        
+
     def check_symbols_availability(self):
         """
         Checks the availability of the symbols in the MetaTrader 5 Market Watch.
@@ -94,11 +104,12 @@ class MetaTrader5Client:
         available_symbols = [s.name for s in mt5.symbols_get()]
         for pair in self.symbols:
             if pair not in available_symbols:
-                print(f"Pair {pair} is not available. Check if it's enabled in Market Watch.")
+                print(
+                    f"Pair {pair} is not available. Check if it's enabled in Market Watch.")
                 return False
         return True
 
-    def get_Symbols(self): 
+    def get_Symbols(self):
         all_symbols = mt5.symbols_get()
         symbols = []
         for symbol in all_symbols:
@@ -134,13 +145,16 @@ class MetaTrader5Client:
         start_date = end_date - relativedelta(months=6)
 
         for tf_name, tf_value in self.TF.items():
-            rates = mt5.copy_rates_range(symbol, tf_value, start_date, end_date)
+            rates = mt5.copy_rates_range(
+                symbol, tf_value, start_date, end_date)
             if rates is not None and len(rates) > 0:
                 df = pd.DataFrame(rates)
-                df['time'] = pd.to_datetime(df['time'], unit='s')  # convert timestamps to datetime
+                # convert timestamps to datetime
+                df['time'] = pd.to_datetime(df['time'], unit='s')
                 multi_tf_data[tf_name] = df
             else:
-                print(f"Failed to retrieve {symbol} rates for {tf_name}, error: {mt5.last_error()}")
+                print(
+                    f"Failed to retrieve {symbol} rates for {tf_name}, error: {mt5.last_error()}")
 
         return multi_tf_data
 
@@ -150,10 +164,10 @@ class MetaTrader5Client:
         multi_tf_data = {}
 
         print(f'🔍 Fetching data for {symbol}...')
-        
+
         # Loop over the provided timeframes
         for tf_name, tf_value in self.TF.items():
-           
+
             # Fetch live data for each timeframe
             data = self.get_live_data(symbol, tf_value, 1000)
 
@@ -178,13 +192,16 @@ class MetaTrader5Client:
             file_exists = os.path.isfile(file_path)
 
             if not file_exists:
-                self.Ratesdata.to_csv(file_path, index=False, mode='w', header=True)
-                print(f"New file created and entry levels saved to {file_path}.")
+                self.Ratesdata.to_csv(
+                    file_path, index=False, mode='w', header=True)
+                print(
+                    f"New file created and entry levels saved to {file_path}.")
             else:
-                self.Ratesdata.to_csv(file_path, index=False, mode='a', header=False)
+                self.Ratesdata.to_csv(
+                    file_path, index=False, mode='a', header=False)
                 print(f"Entry levels appended to existing file {file_path}.")
         else:
-                print("No rates to save.")
+            print("No rates to save.")
 
     def close(self):
         """ Close the MT5 connection.
@@ -192,6 +209,7 @@ class MetaTrader5Client:
         mt5.shutdown()
         print("🔌 Disconnected from MetaTrader 5.")
         return False
+
 
 class dataHandler:
     def save_trade(self, trade_data, file_type="json"):
@@ -248,8 +266,8 @@ class dataHandler:
                 writer.writeheader()
             writer.writerow(entry)
         print(f"✅ Trade saved to {file_path}")
-        
-            
+
+
 class DataPlotter:
 
     @staticmethod
@@ -280,10 +298,12 @@ class DataPlotter:
     @staticmethod
     def plot_charts(rates, entries, fast_period, slow_period):
         if rates is None:
-            raise ValueError("Error: `self.results` is None. Run `backtest_strategy()` before plotting.")
+            raise ValueError(
+                "Error: `self.results` is None. Run `backtest_strategy()` before plotting.")
 
         if 'Crossover' not in rates.columns:
-            raise ValueError("Error: 'Crossover' column is missing in `self.results`. Check data processing.")
+            raise ValueError(
+                "Error: 'Crossover' column is missing in `self.results`. Check data processing.")
 
         if 'close' not in rates.columns or rates['close'].empty:
             raise ValueError("No Close data available")
@@ -294,24 +314,32 @@ class DataPlotter:
         plt.plot(rates.index, rates['close'], label="Close", color='black')
 
         # Plot the fast and slow moving averages
-        plt.plot(rates.index, rates['Fast_MA'], label=f"Fast MA ({fast_period})", color='blue')
-        plt.plot(rates.index, rates['Slow_MA'], label=f"Slow MA ({slow_period})", color='red')
+        plt.plot(rates.index, rates['Fast_MA'],
+                 label=f"Fast MA ({fast_period})", color='blue')
+        plt.plot(rates.index, rates['Slow_MA'],
+                 label=f"Slow MA ({slow_period})", color='red')
 
         # Plot buy/sell signals
         buy_signals = rates.loc[rates['Crossover'] == 2]
         sell_signals = rates.loc[rates['Crossover'] == -2]
 
-        plt.plot(buy_signals.index, buy_signals['Fast_MA'], '^', color='green', markersize=12, label="Buy Signal")
-        plt.plot(sell_signals.index, sell_signals['Fast_MA'], 'v', color='red', markersize=12, label="Sell Signal")
+        plt.plot(buy_signals.index, buy_signals['Fast_MA'], '^',
+                 color='green', markersize=12, label="Buy Signal")
+        plt.plot(sell_signals.index, sell_signals['Fast_MA'],
+                 'v', color='red', markersize=12, label="Sell Signal")
 
         # Plot SL/TP levels
         for i in buy_signals.index:
-            plt.hlines(rates.loc[i, 'StopLoss'], i, i+5, colors='red', linestyles='dashed', label="SL" if i == buy_signals.index[0] else "")
-            plt.hlines(rates.loc[i, 'TakeProfit'], i, i+5, colors='green', linestyles='dashed', label="TP" if i == buy_signals.index[0] else "")
+            plt.hlines(rates.loc[i, 'StopLoss'], i, i + 5, colors='red',
+                       linestyles='dashed', label="SL" if i == buy_signals.index[0] else "")
+            plt.hlines(rates.loc[i, 'TakeProfit'], i, i + 5, colors='green',
+                       linestyles='dashed', label="TP" if i == buy_signals.index[0] else "")
 
         for i in sell_signals.index:
-            plt.hlines(rates.loc[i, 'StopLoss'], i, i+5, colors='red', linestyles='dashed')
-            plt.hlines(rates.loc[i, 'TakeProfit'], i, i+5, colors='green', linestyles='dashed')
+            plt.hlines(rates.loc[i, 'StopLoss'], i, i + 5,
+                       colors='red', linestyles='dashed')
+            plt.hlines(rates.loc[i, 'TakeProfit'], i, i + 5,
+                       colors='green', linestyles='dashed')
 
         plt.title('Moving Average Crossover Signals with SL/TP')
         plt.legend(loc='upper left')

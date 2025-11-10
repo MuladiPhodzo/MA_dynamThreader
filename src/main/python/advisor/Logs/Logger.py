@@ -3,6 +3,7 @@ import csv
 import os
 from datetime import datetime
 
+
 class FileLogger:
     def __init__(self, user_data, filename=None):
         self.user_data = user_data
@@ -14,7 +15,7 @@ class FileLogger:
 
         self.filename = filename or os.path.join(logs_dir, "logs.csv")
         self._init_file()
-        
+
         # Redirect print() to this logger
         sys.stdout = self
         sys.stderr = self
@@ -26,9 +27,9 @@ class FileLogger:
             with open(self.filename, mode='w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
                 writer.writerow([])
-            
+
     def write(self, message: str):
-        
+
         message = message.strip()
         if not message:
             return

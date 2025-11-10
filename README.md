@@ -26,14 +26,30 @@ MovingAverage_Advisor/
 │   ├── RunAdvisorBot.py       # Main bot runner
 │   ├── Trade/
 │   │   └── TradesAlgo.py      # Trade execution logic
-│   └── database/
-│       └── MySQLdatabase.py   # Optional DB logging
-│
-├── NovingAverage/
-│   └── MovingAverage.py       # Strategy implementation
-│
-├── Dockerfile                 # Docker container config
+│   ├── database/
+│   |   ├── MySQLdatabase.py   # Optional DB logging
+|   ├── Telegram/
+│   |   ├── __init__.py
+│   |       ├── core.py              # main TelegramMessenger (async)
+│   |       ├── runner.py            # bot startup with lock + watchdog
+│   |       ├── handlers/
+│   |       │   ├── __init__.py
+│   |       │   ├── start_handler.py
+│   |       │   ├── stop_handler.py
+│   |       │   ├── status_handler.py
+│   |       └── utils/
+│   |           ├── logger.py        # rotating logs
+│   |           ├── singleton.py     # PID lock + stale cleanup
+│   |           ├── env_loader.py    # unified .env resolver
+│   |           └── healthcheck.py   # simple health server  
+|   │
+|   ├── MovingAverage/
+|   │   └── MovingAverage.py       # Strategy implementation
+|   │
+├── .env
+├── makefile
 ├── build.py                   # PyBuilder build script
+├── Dockerfile                 # Docker container config
 ├── requirements.txt           # Python dependencies
 ├── README.md                  # Project documentation
 └── .pybuilder/                # PyBuilder generated files
