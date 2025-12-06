@@ -8,15 +8,30 @@ import queue
 import sys
 import json
 import os
-
+import logging
+from advisor.Trade.tradeStats import TradeStats as Stats
 CONFIG_FILE = "user_config.json"
+
+# -------------------------
+# Logging Configuration
+# -------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler("MA_DynamAdvisor.log", encoding="utf-8"),
+        logging.StreamHandler(sys.stdout),
+    ],
+)
+
+logger = logging.getLogger(__name__)
 
 # ==========================================================
 #              TEXT REDIRECTOR (stdout -> GUI)
 # ==========================================================
 
 class TextRedirector:
-    """Redirects print statements to both GUI and console."""
+    """Redirects logger.info statements to both GUI and console."""
 
     def __init__(self, log_window):
         self.log_window = log_window
@@ -39,12 +54,9 @@ class TextRedirector:
 
     def restore(self):
         sys.stdout = self.stdout
-               
-import logging
 
 class QueueLoggerHandler(logging.Handler):
     """Redirects Python logger messages to the Tkinter GUI queue."""
-    
     def __init__(self, log_window):
         super().__init__()
         self.log_window = log_window
@@ -72,6 +84,8 @@ class LogWindow:
         self.window.geometry("1440x840")
 
         self.queue = queue.Queue()
+
+        self.stats = Stats()
         self.stop_callback = None
         self._build_main_layout()
         self._build_live_log_panel()
@@ -152,7 +166,7 @@ class LogWindow:
         self.summary_container.pack(fill="both", expand=True, pady=10)
 
         self.add_collapsible_section("Change Rates", {
-            "Daily": "+12%",
+            "Daily": f"{10}%",
             "Weekly": "+7%",
             "Monthly": "-5%",
         })
@@ -166,21 +180,22 @@ class LogWindow:
     def _load_sample_summary(self):
         summary_data = {
             "Performance": {
-                "Total Trades Executed": 12,
-                "Trades in Profit": 7,
-                "Trades in Loss": 5,
-                "Account % Change": "+3.4%",
+                "Total Trades Executed": self.stats.num_trades,
+                "Trades in Profit": self.stats.tradesInProfit,
+                "Trades in Loss": self.stats.loss,
+                "Account % Change": f"{self.stats.accountChangePercent}%",
             },
             "Risk Metrics": {
-                "Max Drawdown": "-2.1%",
-                "Sharpe Ratio": "1.45",
-                "Win Rate": "58%",
+                "Max Drawdown": f"{self.stats.drawdown}",
+                "Sharpe Ratio": f"{self.stats.sharpeRatio}",
+                "Win Rate": f"{self.stats.winRate}%",
             },
         }
 
         self.summary_area.config(state="normal")
         self.summary_area.delete("1.0", tk.END)
         self.summary_area.insert(tk.END, "📊 Trading Performance Summary\n\n")
+
         for key, values in summary_data.items():
             self.summary_area.insert(tk.END, f"{key}:\n")
             for metric, val in values.items():
@@ -238,20 +253,20 @@ class LogWindow:
         LogWindow.paused = not LogWindow.paused
         if LogWindow.paused:
             self.pause_button.config(text="▶ Resume Bot", bootstyle=SUCCESS)
-            print("⏸ Bot paused.")
+            logger.info("⏸ Bot paused.")
         else:
             self.pause_button.config(text="⏸ Pause Bot", bootstyle=INFO)
-            print("▶ Bot resumed.")
+            logger.info("▶ Bot resumed.")
 
     def quit(self):
-        print("🛑 Stopping bot...")
+        logger.info("🛑 Stopping bot...")
         UserGUI.should_run = False
         root_logger = logging.getLogger()
         root_logger.removeHandler(self.logger_handler)
         self.window.destroy()
         if hasattr(self, "stop_callback"):
             self.set_stop_callback(self.stop_callback)
-            
+
         self.window.destroy()
         sys.exit(0)
 
@@ -270,24 +285,15 @@ class UserGUI:
         self.root.title("🚀 Trading Bot Setup")
         self.root.geometry("700x650")
 
-        # self.userDataSample = {
-        #     'volume': 0.1,
-        #     'sl': 250,
-        #     'rr': '1:2',
-        #     'tp': {'LTF': '30M', 'HTF': '1H'},
-        #     "account_id": 308826480,
-        #     "password": "N3gus5@1111",
-        #     "server": "XMGlobal-MT5 6"
-        # }
-
         self.user_data = {}
         self.log_window = None
         self._build_main_ui()
         if CONFIG_FILE and os.path.exists(CONFIG_FILE):
             proceed = self.prompt_window(
-                "Existing configuration found. Do you want to overwrite it with new inputs?")
+                "Existing configuration found. run previous configuration?")
             if proceed:
                 self._load_user_config()
+                self._sync_ui_to_user_data()
                 self.start_bot()
 
     def pop_up_error(self, message: str):
@@ -398,8 +404,9 @@ class UserGUI:
 
             self.user_data = {
                 "volume": volume,
-                "sl_distance": sl,
+                "sl": sl,
                 "rr_ratio": rr,
+                "tp": self.handleRR(),
                 "tf_primary": self.tf_primary.get(),
                 "tf_secondary": self.tf_secondary.get(),
                 "server": server,
@@ -411,55 +418,129 @@ class UserGUI:
             messagebox.showerror("Input Error", str(e))
             return
 
+    def _sync_ui_to_user_data(self):
+        """Synchronize widget values back to self.user_data."""
+        try:
+            self.user_data = {
+                "volume": self.volume.get(),
+                "sl": self.sl.get(),
+                "rr_ratio": self.rr.get(),
+                "tp": self.handleRR(),
+                "tf_primary": self.tf_primary.get(),
+                "tf_secondary": self.tf_secondary.get(),
+                "server": self.server.get(),
+                "account_id": int(self.account_id.get()),
+                "password": self.password.get(),
+            }
+        except Exception as e:
+            logger.info(f"⚠️ Failed to sync UI to user_data: {e}")
+
     # ----------------------------------------------------------
     # Remember Me Logic
     # ----------------------------------------------------------
     def _load_user_config(self):
+        """Load saved user configuration and populate GUI widgets."""
+        if not os.path.exists(CONFIG_FILE):
+            logger.info("⚠️ No config file to load.")
+            return
+
         try:
             with open(CONFIG_FILE, "r") as f:
-                config: json = json.load(f)
-                self.volume.insert(0, config.get("volume"))
-                self.sl.insert(0, config.get("sl_distance"))
-                self.rr.insert(0, config.get("rr_ratio", ""))
-                self.tf_primary.insert(0, config.get("tf_primary", ""))
-                self.tf_secondary.insert(0, config.get("tf_secondary", ""))
-                self.server.insert(0, config.get("server", ""))
-                self.account_id.insert(0, config.get("account_id", ""))
-                self.password.insert(0, config.get("password", ""))
-                self.remember_me.set(True)
+                data = json.load(f)
+
+            # Ensure saved values are clean
+            cleaned_data = {
+                "volume": str(data.get("volume", "")),
+                "sl_distance": int(data.get("sl", 150)),
+                "rr_ratio": str(data.get("rr_ratio", "")),
+                "tf_primary": str(data.get("tf_primary", "")),
+                "tf_secondary": str(data.get("tf_secondary", "")),
+                "server": str(data.get("server", "")),
+                "account_id": str(data.get("account_id", "")),  # convert int → string for GUI
+                "password": str(data.get("password", "")),
+            }
+
+            # Auto-detect widget type (StringVar or Entry)
+            def set_val(widget, value):
+                if hasattr(widget, "set"):
+                    widget.set(value)
+                elif hasattr(widget, "delete") and hasattr(widget, "insert"):
+                    widget.delete(0, "end")
+                    widget.insert(0, value)
+
+            set_val(self.volume, cleaned_data["volume"])
+            set_val(self.sl, cleaned_data["sl_distance"])
+            set_val(self.rr, cleaned_data["rr_ratio"])
+            set_val(self.tf_primary, cleaned_data["tf_primary"])
+            set_val(self.tf_secondary, cleaned_data["tf_secondary"])
+            set_val(self.server, cleaned_data["server"])
+            set_val(self.account_id, cleaned_data["account_id"])
+            set_val(self.password, cleaned_data["password"])
+
+            # Persist loaded data internally
+            self.user_data = cleaned_data
+
+            logger.info("✅ User config loaded successfully.")
+
         except Exception as e:
-            print(f"⚠ Failed to load config: {e}")
+            logger.info(f"❌ Failed to load config: {e}")
 
     def _save_user_config(self):
+        import tempfile
+        import shutil
+        import re
+        """Save user configuration safely and prevent duplicate concatenation."""
         if self.remember_me.get():
+            def clean_value(v):
+                """Remove repeated patterns and extra spaces."""
+                v = str(v).strip()
+                # Detect and reduce duplicated patterns like '1H1H1H' -> '1H'
+                match = re.match(r"^(.+?)\1+$", v)
+                if match:
+                    v = match.group(1)
+                return v
+
             self.user_data = {
-                "volume": self.volume.get(),
-                "sl_distance": self.sl.get(),
-                "rr_ratio": self.rr.get(),
-                "tf_primary": self.tf_primary.get(),
-                "tf_secondary": self.tf_secondary.get(),
-                "server": self.server.get(),
-                "account_id": self.account_id.get(),
-                "password": self.password.get(),
+                "volume": clean_value(self.volume.get()),
+                "sl": clean_value(int(self.sl.get())),
+                "rr_ratio": clean_value(self.rr.get()),
+                "tp": self.handleRR(),
+                "tf_primary": clean_value(self.tf_primary.get()),
+                "tf_secondary": clean_value(self.tf_secondary.get()),
+                "server": clean_value(self.server.get()),
+                "account_id": clean_value(int(self.account_id.get())),
+                "password": clean_value(self.password.get()),
             }
-            with open(CONFIG_FILE, "w") as f:
-                json.dump(self.user_data, f)
+
+            tmp_file = tempfile.NamedTemporaryFile("w", delete=False, dir=os.path.dirname(CONFIG_FILE))
+            json.dump(self.user_data, tmp_file, indent=4)
+            tmp_file.close()
+            shutil.move(tmp_file.name, CONFIG_FILE)
+
         elif os.path.exists(CONFIG_FILE):
             os.remove(CONFIG_FILE)
+
+    def handleRR(self):
+        tp_values = self.rr.get().split(":")
+        if len(tp_values) != 2:
+            raise ValueError("RR Ratio must be in format '1:2', '1:3', etc.")
+        else:
+            return self.multiplier(self.sl.get(), tp_values[1])
+
+    def multiplier(self, val1, val2) -> int:
+        return int(int(val1) * int(val2))
     # ----------------------------------------------------------
     # Bot Logic
     # ----------------------------------------------------------
 
     def start_bot(self):
-        
         try:
-                
             if not self.validate_inputs():
                 return
         except Exception as e:
             self.pop_up_error(f"Input validation failed: {e}")
         finally:
-            print("🚀 Starting bot...")
+            logger.info("🚀 Starting bot...")
             if self.remember_me.get():
                 self._save_user_config()
             self.root.withdraw()
@@ -476,9 +557,6 @@ class UserGUI:
 
         if hasattr(self, "stop_callback"):
             self.stop_callback()  # call linked stop function from RunAdvisorBot
-
-        
-        self.root.destroy()
         sys.exit(0)
 
     def set_stop_callback(self, callback):

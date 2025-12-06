@@ -1,67 +1,89 @@
 import MetaTrader5 as mt5
 import pandas as pd
 import datetime as dt
-from advisor.Telegram import Messanger
+import logging
+import sys
+from advisor.Telegram.core import TelegramMessenger as Messenger
 from advisor.Client import mt5Client
+from advisor.Trade.tradeStats import TradeStats as Stats
+
+# -------------------------
+# Logging Configuration
+# -------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler("MA_DynamAdvisor.log", encoding="utf-8"),
+        logging.StreamHandler(sys.stdout),
+    ],
+)
+logger = logging.getLogger(__name__)
 
 
 class MT5TradingAlgorithm:
-    def __init__(self, symbol, telegram: Messanger.TelegramMessenger, user_data, magic_number=8000):
-        """
-        Initialize the MT5 trading algorithm.
-        :param symbol: The trading symbol (e.g., 'USDJPY').
-        :param telegram: Telegram messenger object for alerts.
-        :param user_data: Dict with trading parameters (volume, sl, tp).
-        :param magic_number: Unique identifier for this strategy's trades.
-        """
+    def __init__(self, symbol, telegram: Messenger, user_data, magic_number=8000):
+
         self.symbol = symbol
-        self.lot_size = float(user_data.get("volume", 0.1))
+        self.telegram = telegram
         self.magic_number = magic_number
         self.user_data = user_data
-        self.current_position = None  # 'buy', 'sell', or None
-        self.telegram = telegram
-        self.opened = [False, False, False]
+        self.lot_size = float(user_data.get("volume", 0.1))
+
+        self.stats = Stats()
+
+        # ensure symbol info exists
+        self.refresh_symbol_info()
+
+        # state
+        self.current_position = None
         self.openTrades = 0
+        self.opened = [False, False]
 
-        # Initialize TradesData properly
-        self.TradesData = pd.DataFrame()
+        # multi-timeframe data
+        self.TradesData = {}   # MUST be a dict for .get() to work
+        self.active_trades = {}     # key = ticket
+        self.closed_trades = {}     # key = ticket
 
+    # -----------------------------------------------------------
+    # Utility: Refresh symbol info (safe reconnection)
+    # -----------------------------------------------------------
+    def refresh_symbol_info(self):
+        self.symbol_info = mt5.symbol_info(self.symbol)
+        if not self.symbol_info:
+            logger.error(f"⚠️ Symbol info for {self.symbol} unavailable. Re-checking MT5 connection...")
+            mt5.initialize()
+            self.symbol_info = mt5.symbol_info(self.symbol)
+
+        if not self.symbol_info:
+            logger.error(f"❌ Fatal: Symbol {self.symbol} still not found.")
+        else:
+            logger.info(f"📌 Loaded symbol info: {self.symbol}")
+
+    # -----------------------------------------------------------
+    # Order Placement
+    # -----------------------------------------------------------
     def place_order(self, action, stop_loss=100, take_profit=300):
-        """
-        Place a buy or sell order on MT5.
-        :param action: 'buy' or 'sell'.
-        :param stop_loss: SL in points.
-        :param take_profit: TP in points.
-        :return: (success: bool, request: dict | None)
-        """
         try:
             if action not in ["buy", "sell"]:
-                raise ValueError(
-                    f"Invalid action '{action}', must be 'buy' or 'sell'.")
+                raise ValueError(f"Invalid action '{action}'")
 
-            symbol_info = mt5.symbol_info(self.symbol)
-            if symbol_info is None:
-                print(f"❌ Symbol {self.symbol} not found.")
-                return False, None
-
-            if not symbol_info.visible:
-                if not mt5.symbol_select(self.symbol, True):
-                    print(f"❌ Failed to select symbol {self.symbol}.")
+            if not self.symbol_info:
+                self.refresh_symbol_info()
+                if not self.symbol_info:
                     return False, None
 
-            # Get current price safely
+            if not self.symbol_info.visible:
+                mt5.symbol_select(self.symbol, True)
+
             tick = mt5.symbol_info_tick(self.symbol)
-            if tick is None:
-                print(f"❌ Could not fetch tick data for {self.symbol}.")
+            if not tick:
+                logger.error(f"❌ No tick data for {self.symbol}")
                 return False, None
 
             price = tick.ask if action == "buy" else tick.bid
-            if price <= 0:
-                print(f"❌ Invalid price received for {self.symbol}.")
-                return False, None
-
             order_type = mt5.ORDER_TYPE_BUY if action == "buy" else mt5.ORDER_TYPE_SELL
-            point = symbol_info.point
+            point = self.symbol_info.point
 
             request = {
                 "action": mt5.TRADE_ACTION_DEAL,
@@ -73,142 +95,245 @@ class MT5TradingAlgorithm:
                 "tp": round(price + take_profit * point if action == "buy" else price - take_profit * point, 5),
                 "deviation": 10,
                 "magic": self.magic_number,
-                "comment": f"{action.capitalize()} trade by Moving Average strategy",
                 "type_time": mt5.ORDER_TIME_GTC,
                 "type_filling": mt5.ORDER_FILLING_IOC,
             }
 
-            return self.executeTrade(request, symbol_info, action, price)
+            logger.info(f"📤 placing {action.upper()} order: {request}")
 
-        except Exception as e:
-            print(f"❌ Error placing order: {e}")
-            return False
-
-    def run_Trades(self, market_bias, ltf_Bias: pd.DataFrame, latest, current_price, THRESHOLD, symbol):
-        """ Execute trading logic based on market and LTF bias.
-        :param market_bias: 'Bullish' or 'Bearish' for the higher timeframe.
-        :param ltf_Bias: 'Buy' or 'Sell' for the lower timeframe.
-        :param latest: Latest data containing indicators.
-        :param current_price: Current market price.
-        :param THRESHOLD: Acceptable range threshold."""
-
-        try:
-            ltf_latest = latest.copy()
-            diff = abs(current_price - ltf_latest["Fast_MA"])
-            in_range = diff <= THRESHOLD
-            ltf_latest["Range"] = in_range
-
-            print(
-                f"📌 Decision {symbol}: Market Bias={market_bias}, LTF Bias={ltf_Bias}, In Range={in_range}")
-
-            if not in_range:
-                print(f"{symbol} - No valid entry signal.")
-                return False
-
-            if market_bias == "Bullish" and ltf_Bias == "Buy" and current_price > ltf_latest["Fast_MA"]:
-                print(f"{symbol} - Confirmed Bullish Signal → BUY")
-                return self.place_order("buy", self.user_data["sl"], self.user_data["tp"])
-
-            elif market_bias == "Bearish" and ltf_Bias == "Sell" and current_price < ltf_latest["Fast_MA"]:
-                print(f"{symbol} - Confirmed Bearish Signal → SELL")
-                return self.place_order("sell", self.user_data["sl"], self.user_data["tp"])
+            if True in self.opened:
+                success = self.execute_trade(request, action, price)
+                if success:
+                    self.stats.log_trade(
+                        symbol=self.symbol,
+                        action=action,
+                        price=price,
+                        volume=self.lot_size,
+                        sl=request["sl"],
+                        tp=request["tp"],
+                    )
+                return success, request
 
             else:
-                print(f"{symbol} - Conditions not met for trade.")
+                logger.warning(f"⚠️ Trading queue full for {self.symbol}")
+                return False, request
+
+        except Exception as e:
+            logger.exception(f"❌ Error placing order: {e}")
+            return False, None
+
+    # -----------------------------------------------------------
+    # Execute trade
+    # -----------------------------------------------------------
+    def execute_trade(self, request, action, price):
+        try:
+
+            if self.symbol_info.trade_mode == mt5.SYMBOL_TRADE_MODE_DISABLED:
+                logger.error(f"❌ Trading disabled for {self.symbol}")
                 return False
 
-        except KeyError as e:
-            print(f"❌ Missing expected key in latest data: {e}")
-            return False
+            result = mt5.order_send(request)
+
+            if not result or result.retcode != mt5.TRADE_RETCODE_DONE:
+                logger.error(f"❌ Order failed: {result}")
+                return False
+
+            logger.info(f"✅ {action.upper()} executed at {price}")
+
+            # --------------------------------------
+            # 🔥 Track ACTIVE TRADE
+            # --------------------------------------
+            ticket = result.order
+
+            self.active_trades[ticket] = {
+                "ticket": ticket,
+                "action": action,
+                "symbol": self.symbol,
+                "open_price": price,
+                "sl": request["sl"],
+                "tp": request["tp"],
+                "volume": request["volume"],
+                "open_time": dt.datetime.now(),
+            }
+
+            logger.info(f"📌 Active Trades Updated → {len(self.active_trades)} open trades")
+
+            # Record into persistent file
+            mt5Client.dataHandler.save_trade(
+                trade_data=request,
+                file_format='json'
+            )
+
+            return True
+
         except Exception as e:
-            print(f"❌ Error in run_Trades: {e}")
+            logger.exception(f"❌ Error executing trade: {e}")
             return False
 
-    def Load_TradesHistory(self, days=1):
+    def sync_closed_trades(self):
         """
-        Check for closed trades in the last N days for this strategy (magic number).
-        Returns a DataFrame with profit/loss.
+        Pull closed trades from MT5 and update closed_trades dictionary.
+        Moves trades from active → closed when detected.
         """
+
+        try:
+            utc_from = dt.datetime.now() - dt.timedelta(days=5)
+            utc_to = dt.datetime.now()
+
+            deals = mt5.history_deals_get(utc_from, utc_to)
+            if not deals:
+                return
+
+            df = pd.DataFrame(list(deals), columns=deals[0]._asdict().keys())
+
+            df = df[(df["symbol"] == self.symbol) & (df["magic"] == self.magic_number)]
+
+            if df.empty:
+                return
+
+            for _, row in df.iterrows():
+                ticket = row["order"]
+
+                # Trade is still open → ignore
+                if ticket in self.active_trades:
+                    # trade closed → move to closed list
+                    pl = row["profit"]
+                    exit_price = row["price"]
+                    close_time = row["time"]
+
+                    self.closed_trades[ticket] = {
+                        "ticket": ticket,
+                        "symbol": self.symbol,
+                        "open_price": self.active_trades[ticket]["open_price"],
+                        "close_price": exit_price,
+                        "volume": self.active_trades[ticket]["volume"],
+                        "profit": pl,
+                        "open_time": self.active_trades[ticket]["open_time"],
+                        "close_time": close_time,
+                        "duration_seconds": (close_time - self.active_trades[ticket]["open_time"]).seconds,
+                        "reason": "SL/TP/Manual"
+                    }
+
+                    logger.info(f"📉 Trade closed: ticket={ticket}, profit={pl}")
+
+                    del self.active_trades[ticket]
+
+        except Exception as e:
+            logger.exception(f"❌ Error syncing closed trades: {e}")
+
+    # -----------------------------------------------------------
+    # Detect proximity
+    # -----------------------------------------------------------
+    def detect_latest_price_proximity(self):
+        PROXIMITY_TFS = ["15M", "30M", "1H", "2H", "4H"]
+        results = {}
+
+        # Ensure TradesData is dict
+        if not isinstance(self.TradesData, dict):
+            logger.error("TradesData must be a dict of {tf: df}")
+            return False
+
+        for tf_name in PROXIMITY_TFS:
+            df = self.TradesData.get(tf_name)
+            if df is None or df.empty:
+                continue
+
+            latest = df.iloc[-1]
+
+            if "Fast_MA" not in latest or "Slow_MA" not in latest:
+                continue
+
+            price = latest["close"]
+            fast = latest["Fast_MA"]
+            fast_diff = abs(price - fast)
+
+            threshold = (20 if "H" in tf_name else 10) * self.symbol_info.point
+
+            results[tf_name] = {
+                "fast_diff": fast_diff,
+                "threshold": threshold,
+                "is_close": fast_diff <= threshold,
+                "price": price,
+                "fast_ma": fast,
+            }
+
+        return self.all_timeframes_close(results)
+
+    def all_timeframes_close(self, proximity_dict):
+        if not proximity_dict:
+            return False
+
+        for tf, info in proximity_dict.items():
+            if not info.get("is_close", False):
+                return False
+
+        return True
+
+    # -----------------------------------------------------------
+    # Main decision logic
+    # -----------------------------------------------------------
+    def run_trades(self, THRESHOLD, symbol):
+        try:
+            trend = self.TradesData.get("Main_Trend", None)
+
+            if trend == "":
+                logger.error("❌ Main_Trend missing.")
+                return False
+
+            # Safe check for M30 fast MA
+            df_30 = self.TradesData.get("30M")
+            if df_30 is None or df_30.empty:
+                logger.error("⚠️ Missing 30M data")
+                return False
+            
+            current_price = df_30["close"].iloc[-1]
+
+            fast_ma_30 = df_30["Fast_MA"].iloc[-1]
+            diff = abs(current_price - fast_ma_30)
+            in_range = diff <= THRESHOLD
+
+            logger.info(f"📌 {symbol} Market Bias={trend}, In Range={in_range}")
+
+            if not self.detect_latest_price_proximity():
+                logger.info(f"{symbol} Price not close across all TF → No trade")
+                return False
+
+            if trend == "Bearish":
+                return self.place_order("buy",
+                                        self.user_data["sl"],
+                                        self.user_data["tp"])
+
+            elif trend == "Bullish":
+                return self.place_order("sell",
+                                        self.user_data["sl"],
+                                        self.user_data["tp"])
+
+            return False
+
+        except Exception as e:
+            logger.exception(f"❌ Error in run_trades: {e}")
+            return False
+
+    # -----------------------------------------------------------
+    # Stats & History
+    # -----------------------------------------------------------
+    def load_trades_history(self, days=1):
         try:
             utc_from = dt.datetime.now() - dt.timedelta(days=days)
             utc_to = dt.datetime.now()
 
-            # Fetch deals history from MT5
             deals = mt5.history_deals_get(utc_from, utc_to)
-            if deals is None:
-                print("❌ No deal history retrieved.")
+            if not deals:
                 return pd.DataFrame()
 
-            # Convert to DataFrame
-            deals_df = pd.DataFrame(
-                list(deals), columns=deals[0]._asdict().keys())
-            if deals_df.empty:
-                print("⚠️ No closed trades in this period.")
-                return deals_df
+            df = pd.DataFrame(list(deals), columns=deals[0]._asdict().keys())
+            df = df[(df["magic"] == self.magic_number) & (df["symbol"] == self.symbol)]
+            if df.empty:
+                return df
 
-            # Filter only this strategy's trades (by magic number and symbol)
-            deals_df = pd.DataFrame(deals_df[(deals_df["magic"] == self.magic_number) & (
-                deals_df["symbol"] == self.symbol)])
-
-            if deals_df.empty:
-                print("⚠️ No closed trades for this strategy.")
-                return deals_df
-
-            # Mark trades as Profit or Loss
-            deals_df["P/L"] = deals_df["profit"].apply(
-                lambda p: "Profit" if p > 0 else "Loss" if p < 0 else "BreakEven")
-
-            # Print summary
-            print("📊 Closed Trades Summary:")
-            for _, row in deals_df.iterrows():
-                print(
-                    f"  {row['symbol']} | Ticket: {row['ticket']} | Profit: {row['profit']} | {row['Result']}")
-
-            return deals_df
+            self.stats.update_from_history(df)
+            return df
 
         except Exception as e:
-            print(f"❌ Error fetching closed trades: {e}")
+            logger.exception(f"❌ Error fetching trade history: {e}")
             return pd.DataFrame()
-
-    def executeTrade(self, request, symbol_info, action, price):
-        try:
-            # Send order
-            while (False not in self.opened):
-                if symbol_info.trade_mode == 0:
-                    result = mt5.order_send(request)
-                    if result is None:
-                        print(
-                            "❌ mt5.order_send() returned None — check if MetaTrader is initialized and logged in.")
-
-                    if result.retcode != mt5.TRADE_RETCODE_DONE:
-                        print(f"❌ Order failed: {result.retcode}")
-
-                    else:
-                        print(
-                            f"✅ {action.capitalize()} order placed at {price}. Retcode: {result.retcode}")
-                        self.telegram.send_message(
-                            f"🟢Placed {action} {self.symbol} @ {request['price']} | TP: {request['tp']} | SL: {request['sl']}\n NB: use proper risk management")
-
-                        self.TradesData.add(request)
-                        self.TradesData = self.TradesData.drop(
-                            columns=['type_time', 'comment', 'type_filling', 'deviation'])
-                        self.current_position = action
-                        self.openTrades += 1
-                        self.opened[self.openTrades] = True
-                        print(
-                            f"🟢 {self.symbol} Placing{str(action).upper()} order...")
-                        return True, request
-
-        except Exception as e:
-            raise Exception(f"❌ Error executing trade: {e}")
-
-        finally:
-            print(
-                f'sending Telegram: {self.symbol} {action} signal via telegram...')
-            self.telegram.send_message(
-                f"🟢 {action} {self.symbol} | TP: {request['tp']} | SL: {request['sl']}\n NB: use proper risk management")
-            mt5Client.dataHandler._toCSV(
-                "Trade/trades_log.csv", request, dt.datetime.now().strftime("%Y-%m-%d %H:%M"))
-            self.TradesData.add(request)
-
-            return True

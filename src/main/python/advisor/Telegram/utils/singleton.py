@@ -1,5 +1,18 @@
-import os, json, time, psutil
+import os, sys, json, time, psutil, logging
 
+# -------------------------
+# Logging Configuration
+# -------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler("MA_DynamAdvisor.log", encoding="utf-8"),
+        logging.StreamHandler(sys.stdout),
+    ],
+)
+
+logger = logging.getLogger(__name__)
 LOCK_FILE = "MA_DynamAdvisor.lock"
 
 def check_and_create_lock():
@@ -9,10 +22,10 @@ def check_and_create_lock():
                 data = json.load(f)
             pid = data.get("pid")
             if not psutil.pid_exists(pid):
-                print("⚠️ Stale lock detected. Removing old instance.")
+                logger.info("⚠️ Stale lock detected. Removing old instance.")
                 os.remove(LOCK_FILE)
             else:
-                print(f"⚠️ Bot already running (PID {pid}). Attaching to it or exiting.")
+                logger.info(f"⚠️ Bot already running (PID {pid}). Attaching to it or exiting.")
                 return False
         except Exception:
             os.remove(LOCK_FILE)

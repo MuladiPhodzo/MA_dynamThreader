@@ -43,11 +43,11 @@ class TestLockFileIntegration(unittest.TestCase):
 
             try:
                 if os.path.exists(LOCK_FILE):
-                    print("Another instance is already running.")
+                    logger.info("Another instance is already running.")
                     sys.exit(1)
 
                 open(LOCK_FILE, "w").close()
-                print("Lock file created.")
+                logger.info("Lock file created.")
 
                 # Simulate long-running bot
                 time.sleep(10)
@@ -55,7 +55,7 @@ class TestLockFileIntegration(unittest.TestCase):
             finally:
                 if os.path.exists(LOCK_FILE):
                     os.remove(LOCK_FILE)
-                    print("Lock file removed.")
+                    logger.info("Lock file removed.")
             """
         self.script_path.write_text(script_code)
 
@@ -83,8 +83,8 @@ class TestLockFileIntegration(unittest.TestCase):
 
     #     # Read output for debugging
     #     stdout, stderr = bot.process.communicate()
-    #     print(stdout.decode())
-    #     print(stderr.decode())
+    #     logger.info(stdout.decode())
+    #     logger.info(stderr.decode())
 
 
 if __name__ == "__main__":

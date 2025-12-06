@@ -76,7 +76,7 @@ class TestDataHandler(unittest.TestCase):
     def test_toCSV_empty_data(self):
         handler = dataHandler()
         df = pd.DataFrame()
-        handler.toCSV(df, "test.csv")  # should just print "No data to save."
+        handler.toCSV(df, "test.csv")  # should just logger.info "No data to save."
 
 
 class TestDataPlotter(unittest.TestCase):

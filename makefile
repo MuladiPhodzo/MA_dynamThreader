@@ -49,7 +49,7 @@ typecheck:
 # Build and Packaging
 # ------------------------------
 build: clean test
-	pyinstaller MA_DynamAdvisor.spec
+	pyinstaller --onefile --noconsole --clean --nocompress MA_DynamAdvisor.spec
 
 env:
 	powershell -ExecutionPolicy Bypass -File venv\Scripts\Activate.ps1 

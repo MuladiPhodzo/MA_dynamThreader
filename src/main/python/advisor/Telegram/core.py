@@ -1,14 +1,28 @@
 import asyncio
 import requests
-import sys, os
+import sys
 import signal
 import threading
 import json
+import logging
 from pathlib import Path
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram import Update
 from .utils.env_loader import load_env
 
+# -------------------------
+# Logging Configuration
+# -------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler("MA_DynamAdvisor.log", encoding="utf-8"),
+        logging.StreamHandler(sys.stdout),
+    ],
+)
+
+logger = logging.getLogger(__name__)
 
 class TelegramMessenger:
     """Robust, restartable Telegram bot with async-safe control and persistent chat ID."""
@@ -36,26 +50,26 @@ class TelegramMessenger:
                 data = json.loads(self.CHAT_ID_FILE.read_text())
                 chat_id = data.get("chat_id")
                 if chat_id:
-                    print(f"💾 Restored chat ID: {chat_id}")
+                    logger.info(f"💾 Restored chat ID: {chat_id}")
                     return chat_id
             except Exception as e:
-                print(f"⚠️ Failed to load chat ID: {e}")
+                logger.info(f"⚠️ Failed to load chat ID: {e}")
         return None
 
     def _save_chat_id(self, chat_id):
         try:
             self.CHAT_ID_FILE.write_text(json.dumps({"chat_id": chat_id}))
-            print(f"💾 Saved chat ID: {chat_id}")
+            logger.info(f"💾 Saved chat ID: {chat_id}")
         except Exception as e:
-            print(f"⚠️ Failed to save chat ID: {e}")
+            logger.info(f"⚠️ Failed to save chat ID: {e}")
 
     def _delete_chat_id(self):
         if self.CHAT_ID_FILE.exists():
             try:
                 self.CHAT_ID_FILE.unlink()
-                print("🧹 Removed saved chat ID.")
+                logger.info("🧹 Removed saved chat ID.")
             except Exception as e:
-                print(f"⚠️ Failed to delete chat ID: {e}")
+                logger.info(f"⚠️ Failed to delete chat ID: {e}")
 
     # -------------------------------------------------------------------------
     # External callback
@@ -90,7 +104,7 @@ class TelegramMessenger:
                 else:
                     self.stop_callback()
             except Exception as e:
-                print(f"⚠️ Stop callback failed: {e}")
+                logger.info(f"⚠️ Stop callback failed: {e}")
 
         await self.stop_async()
 
@@ -118,27 +132,27 @@ class TelegramMessenger:
     # -------------------------------------------------------------------------
     async def _initialize_bot(self):
         if self.app:
-            print("⚙️ Bot already initialized.")
+            logger.info("⚙️ Bot already initialized.")
             return
 
         self.app = Application.builder().token(self.BOT_TOKEN).build()
         self.app.add_handler(CommandHandler("start", self._start))
         self.app.add_handler(CommandHandler("stop", self._stop))
         self.app.add_handler(CommandHandler("status", self._status))
-        print("🤖 Telegram bot initialized.")
+        logger.info("🤖 Telegram bot initialized.")
 
     async def _shutdown(self):
         if not self.app:
             return
 
-        print("🛑 Shutting down Telegram bot...")
+        logger.info("🛑 Shutting down Telegram bot...")
         try:
             await self.app.stop()
             await self.app.shutdown()
         except Exception as e:
-            print(f"⚠️ Error during shutdown: {e}")
+            logger.info(f"⚠️ Error during shutdown: {e}")
         else:
-            print("✅ Telegram bot stopped cleanly.")
+            logger.info("✅ Telegram bot stopped cleanly.")
         finally:
             self._delete_chat_id()
             self.app = None
@@ -151,40 +165,39 @@ class TelegramMessenger:
         # Cross-platform signal handling
         if sys.platform != "win32":
             def handle_signal():
-                print("🛑 Signal received — stopping bot...")
+                logger.info("🛑 Signal received — stopping bot...")
                 asyncio.create_task(self._shutdown())
 
             for sig in (signal.SIGINT, signal.SIGTERM):
                 self.loop.add_signal_handler(sig, handle_signal)
         else:
-            print("⚠️ Signal handling disabled on Windows.")
-
-        print("🚀 Telegram bot running...")
+            logger.info("⚠️ Signal handling disabled on Windows.")
         await self.app.run_polling(close_loop=False)
 
     # -------------------------------------------------------------------------
     # Public API
     # -------------------------------------------------------------------------
-    async def start_async(self):
-        return await asyncio.run(self._main())
+    # async def start_async(self):
+    #     await self._main()
 
-    async def start_bot(self):
+    def start_bot(self):
+        """Start the Telegram bot safely in any context (thread or main)."""
         if self.app:
-            print("⚠️ Telegram bot already running.")
+            logger.info("⚠️ Telegram bot already running.")
             return
 
-        print("🚀 Starting Telegram bot...")
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
+        logger.info("🚀 Starting Telegram bot...")
 
-        if loop and loop.is_running():
-            print("⚙️ Running in background thread...")
-            self.thread = threading.Thread(target=lambda: self.start_async(), daemon=True)
-            self.thread.start()
-        else:
-           await self.start_async()
+        def run_in_thread():
+            try:
+                if asyncio.run(self._main()):
+                    logger.info("🚀 Telegram bot running...")
+            except Exception as e:
+                logger.info(f"❌ Telegram bot crashed: {e}")
+
+        # Always spawn a background thread (works on Windows + asyncio)
+        self.thread = threading.Thread(target=run_in_thread, daemon=True)
+        self.thread.start()
 
     async def stop_async(self):
         await self._shutdown()
@@ -193,14 +206,14 @@ class TelegramMessenger:
         if self.loop and self.app:
             asyncio.run_coroutine_threadsafe(self._shutdown(), self.loop)
         else:
-            print("⚠️ Telegram bot not running or loop unavailable.")
+            logger.info("⚠️ Telegram bot not running or loop unavailable.")
 
     # -------------------------------------------------------------------------
     # Restart Handling
     # -------------------------------------------------------------------------
     def restart_bot(self):
         """Gracefully restart the bot with a clean event loop."""
-        print("♻️ Restarting Telegram bot...")
+        logger.info("♻️ Restarting Telegram bot...")
 
         def run_new_loop():
             try:
@@ -208,7 +221,7 @@ class TelegramMessenger:
                 asyncio.set_event_loop(new_loop)
                 new_loop.run_until_complete(self._main())
             except Exception as e:
-                print(f"⚠️ Failed to restart bot: {e}")
+                logger.info(f"⚠️ Failed to restart bot: {e}")
 
         if self.loop and self.loop.is_running():
             asyncio.run_coroutine_threadsafe(self._shutdown(), self.loop)
@@ -222,14 +235,14 @@ class TelegramMessenger:
         if self.app and self.chat_id:
             try:
                 await self.app.bot.send_message(chat_id=self.chat_id, text=message, parse_mode="HTML")
-                print("✅ Message sent successfully via bot.")
+                logger.info("✅ Message sent successfully via bot.")
                 return
             except Exception as e:
-                print(f"⚠️ send_message failed via bot: {e}")
+                logger.info(f"⚠️ send_message failed via bot: {e}")
 
         # fallback (HTTP request)
         if not self.BOT_TOKEN or not self.chat_id:
-            print("⚠️ Cannot send message: missing bot token or chat_id.")
+            logger.info("⚠️ Cannot send message: missing bot token or chat_id.")
             return
 
         try:
@@ -237,8 +250,8 @@ class TelegramMessenger:
             payload = {"chat_id": self.chat_id, "text": message, "parse_mode": "HTML"}
             response = requests.post(url, data=payload)
             if response.status_code == 200:
-                print("✅ Message sent via fallback.")
+                logger.info("✅ Message sent via fallback.")
             else:
-                print(f"❌ Failed to send: {response.status_code} - {response.text}")
+                logger.info(f"❌ Failed to send: {response.status_code} - {response.text}")
         except Exception as e:
-            print(f"❌ Exception while sending message: {e}")
+            logger.info(f"❌ Exception while sending message: {e}")

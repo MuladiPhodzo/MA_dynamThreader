@@ -1,9 +1,10 @@
 import pytest
+import asyncio
 from unittest.mock import patch, MagicMock, AsyncMock
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from advisor.Telegram.Messanger import TelegramMessenger  # adjust path to your module
+from advisor.Telegram.runner import run as run_telegram_bot  # adjust path to your module
 
 
 @pytest.fixture
@@ -19,9 +20,17 @@ def env_setup(monkeypatch, tmp_path):
 def messenger(env_setup, monkeypatch):
     """Initialize TelegramMessenger with valid token."""
     monkeypatch.setattr("pathlib.Path.resolve", lambda self: env_setup)
-    m = TelegramMessenger(chat_id=12345)
+    m = asyncio.run(run_telegram_bot())
     m.BOT_TOKEN = "dummy_token"
     return m
+
+@pytest.fixture(autouse=True)
+def start_telegram_async(monkeypatch):
+    """Automatically start the Telegram bot asynchronously for tests."""
+    monkeypatch.setattr("pathlib.Path.resolve", lambda self: "/non/existent/path")  # prevent actual .env loading
+    m = asyncio.run(run_telegram_bot())
+    yield m
+    # Teardown can be added here if needed
 
 
 # ---------------------------------------------------
@@ -36,13 +45,13 @@ def test_missing_env_token(monkeypatch, tmp_path):
 
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     with pytest.raises(ValueError, match="TELEGRAM_BOT_TOKEN not found"):
-        TelegramMessenger()
+        start_telegram_async(monkeypatch)
 
 
 def test_env_loaded_correctly(env_setup, monkeypatch):
     """Should load .env from correct path."""
     monkeypatch.setattr("pathlib.Path.resolve", lambda self: env_setup)
-    m = TelegramMessenger()
+    m = start_telegram_async(monkeypatch)
     assert m.BOT_TOKEN == "dummy_token"
 
 
@@ -116,7 +125,7 @@ def test_send_message_success(mock_post, messenger):
 
 @patch("requests.post")
 def test_send_message_failure(mock_post, messenger):
-    """Should print error when Telegram returns non-200."""
+    """Should logger.info error when Telegram returns non-200."""
     messenger.chat_id = 999
     mock_post.return_value.status_code = 400
     mock_post.return_value.text = "Bad Request"
