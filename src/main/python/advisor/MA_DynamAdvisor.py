@@ -10,11 +10,14 @@ import queue
 import logging
 import signal
 
+from utils.ThreadHandler import ThreadHandler
+from utils import dataHandler as utils
+from advisor.utils import cache
+
 from advisor.Client import mt5Client
 from advisor.MovingAverage import MovingAverage as MA
 from advisor.Trade import TradesAlgo as algorithim
 from advisor.GUI import userInput as gui
-from advisor.Threads.ThreadHandler import ThreadHandler
 from advisor.Telegram.runner import run as TelegramRunner
 
 
@@ -52,9 +55,11 @@ class RunAdvisorBot:
         self.init = False
         # Thread handler
         self.thread_handler = ThreadHandler(logger=logger.info)
+        self.data_handler = None
 
         # Initialize MT5 client
-        self.client = mt5Client.MetaTrader5Client(self.gui.user_data.get("tf", {}), thread_handler=self.thread_handler)
+        self.client = mt5Client.MetaTrader5Client(self.gui.user_data.get("tf", {}))
+        self.cache = cache.CacheManager()
         # Start Telegram runner as managed thread
         self.thread_handler.start_thread(
             name="telegram_runner",
@@ -72,7 +77,7 @@ class RunAdvisorBot:
         )
 
         # Ensure GUI close event calls our on_close.
-        self.gui.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.gui.root.wm_protocol("WM_DELETE_WINDOW", self.on_close)
 
     # -------------------------------------------------------------------------
     # Telegram wrapper (for ManagedThread)
@@ -81,10 +86,9 @@ class RunAdvisorBot:
         """Run the async Telegram runner. Exits when runner exits or stop_event set."""
         try:
             # Run the Telegram coroutine until it completes or stop_event is set.
-            # async runner may be long-running; run it as-is.
             asyncio.run(TelegramRunner())
         except Exception as e:
-            logger.exception(f"Telegram runner error: {e}")
+            logger.exception(f"Telegram runner error in main: {e}")
             # let ManagedThread handle restarts if enabled
 
     # -------------------------
@@ -185,60 +189,61 @@ class RunAdvisorBot:
                 raise SystemExit
             logger.info(f"▶ {symbol}: Bot resumed.")
 
-    def _get_symbol_data(self, symbol):
+    def _get_symbol_data(self, symbol) -> bool:
         """Fetch multi-timeframe data for the given symbol."""
         try:
-            data_dict = self.client.get_multi_tf_data(symbol)
+            res = self.client.get_multi_tf_data(symbol, self.data_handler)
 
-            if not isinstance(data_dict, dict) or len(data_dict) == 0:
+            if not isinstance(self.data_handler.data, dict) or len(self.data_handler.data) == 0:
                 logger.warning(f"⚠️ Invalid multi-timeframe data received for {symbol}")
-                return None
+                return res
 
             # Ensure all values are proper DataFrames
-            for tf, df in data_dict.items():
+            for tf, df in self.data_handler.data.items():
                 if df is None or getattr(df, "empty", True):
                     logger.warning(f"⚠️ Missing/empty data for {symbol} @ {tf}")
-                    return None
+                    return res
 
-            return data_dict
+            return res
 
         except Exception as e:
             logger.error(f"❌ Error fetching data for {symbol}: {e}")
-            return None
+            return False
 
-    def _calculate_indicators(self, symbol, data_dict):
+    def _calculate_indicators(self, symbol) -> bool:
+        import pandas as pd
         """Calculate MA indicators for every timeframe in the dict."""
         try:
             processed = {}
-            strategy = MA.MovingAverageCrossover(symbol, data=data_dict)
+            strategy = MA.MovingAverageCrossover(symbol, caching=self.cache, data_handler=self.data_handler)
 
             # Calculate MA for ALL timeframes
-            result_dict = strategy.calculate_moving_averages()
-            if not isinstance(result_dict, dict):
-                logger.error("❌ MA result is not a dict")
-                return None
-            if not result_dict.get("Main_Trend"):
+            res = strategy.calculate_moving_averages_data(self.gui.user_data["sl"])
+
+            if not self.data_handler.data.get("Bias"):
                 logger.error("Main Trend missing or empty in data dict")
 
             # Validate every timeframe has MA columns
-            for tf, df in result_dict.items():
-                if tf == "Main_Trend":
-                    continue
-                if df is None or df.empty:
-                    logger.error(f"❌ Missing data after MA calc for {symbol} @ {tf}")
-                    return None
+            if res:
+                for tf, df in self.data_handler.data.items():
+                    if tf == "Main_Trend":
+                        continue
+                    if df is None or not isinstance(df, pd.DataFrame):
+                        logger.error(f"❌ Missing data after MA calc for {symbol} @ {tf}")
+                        return res
 
-                if not all(col in df.columns for col in ["Fast_MA", "Slow_MA"]):
-                    logger.error(f"❌ Missing MA columns for {symbol} @ {tf}")
-                    return None
+                    if not all(col in df.columns for col in ["Fast_MA", "Slow_MA"]):
+                        logger.error(f"❌ Missing MA columns for {symbol} @ {tf}")
+                        return res
 
-                processed[tf] = df
-            self.trade.TradesData = processed
-            return processed
+                    processed[tf] = df
+                    self.data_handler.update(tf, df)
+                return res
+            return res
 
         except Exception as e:
             logger.exception(f"❌ Error calculating indicators for {symbol}: {e}")
-            return None
+            return False
 
     def _analyze_and_trade(self, symbol, data_dict):
         """Use lowest TF for entries and highest TF for bias."""
@@ -262,22 +267,23 @@ class RunAdvisorBot:
         It will honor either the global self.stop_event or the per-thread stop_event.
         """
         try:
-            # Create the trading algorithm instance (original behavior)
+            # Create the trading algorithm instance
+            self.data_handler = utils.dataHandler()
             self.trade = algorithim.MT5TradingAlgorithm(symbol, self.thread_handler.get_by_name("telegram_runner"), self.gui.user_data)
 
             # Keep running while initialization flag is set and neither global nor local stop requested
             while getattr(self, "init", False) and not (self.stop_event.is_set() or stop_event.is_set()):
-                # First respect GUI-level pause (original behavior), then per-thread pause_event.
+                # First respect GUI-level pause, then per-thread pause_event.
                 self._wait_if_paused(symbol)
 
-                # Also allow the pause_event to block here if needed by external caller
+                # Also allow the pause_event to block
                 pause_event.wait()
 
                 if (self.stop_event.is_set() or stop_event.is_set()):
                     break
 
-                data = self._get_symbol_data(symbol)
-                if data is None:
+                res = self._get_symbol_data(symbol)
+                if res:
                     # Wait but allow exit if any stop event set
                     logger.warning("data dict is empty")
                     if self.stop_event.wait(timeout=self.RETRY_DELAY) or stop_event.wait(timeout=0):
@@ -285,14 +291,14 @@ class RunAdvisorBot:
                     continue
 
                 # calculate indicators
-                processed = self._calculate_indicators(symbol, data)
-                if processed is None:
+                processed = self._calculate_indicators(symbol, self.data_handler.data)
+                if processed:
                     if self.stop_event.wait(timeout=self.RETRY_DELAY):
                         break
                     continue
 
-                self._analyze_and_trade(symbol, processed)
-                logger.info(f"🛌 {symbol}: Sleeping for {self.SLEEP_INTERVAL // 60} minutes...")
+                self._analyze_and_trade(symbol, self.data_handler.data)
+                logger.info(f"🛌 Next {symbol} cycle in {self.SLEEP_INTERVAL // 60} minutes...")
                 if not self._sleep_with_stop_check(self.SLEEP_INTERVAL):
                     break
 

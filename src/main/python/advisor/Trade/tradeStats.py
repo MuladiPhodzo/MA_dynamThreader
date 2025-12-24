@@ -4,7 +4,7 @@ import logging
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from advisor.cache.cache import CacheManager as Cache
+from utils.cache import CacheManager as Cache
 # -------------------------
 # Logging Configuration
 # -------------------------

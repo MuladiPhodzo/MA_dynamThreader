@@ -157,22 +157,26 @@ class TelegramMessenger:
             self._delete_chat_id()
             self.app = None
             self.should_run = False
+            self.loop.close()
 
     async def _main(self):
-        await self._initialize_bot()
-        self.loop = asyncio.get_running_loop()
+        try:
+            await self._initialize_bot()
+            self.loop = asyncio.get_running_loop()
 
-        # Cross-platform signal handling
-        if sys.platform != "win32":
-            def handle_signal():
-                logger.info("🛑 Signal received — stopping bot...")
-                asyncio.create_task(self._shutdown())
+            # Cross-platform signal handling
+            if sys.platform != "win32":
+                def handle_signal():
+                    logger.info("🛑 Signal received — stopping bot...")
+                    asyncio.create_task(self._shutdown())
 
-            for sig in (signal.SIGINT, signal.SIGTERM):
-                self.loop.add_signal_handler(sig, handle_signal)
-        else:
-            logger.info("⚠️ Signal handling disabled on Windows.")
-        await self.app.run_polling(close_loop=False)
+                for sig in (signal.SIGINT, signal.SIGTERM):
+                    self.loop.add_signal_handler(sig, handle_signal)
+            else:
+                logger.info("⚠️ Signal handling disabled on Windows.")
+            await self.app.run_polling(close_loop=True)
+        except Exception as e:
+            logger.exception(f"exception caught in telegram: {e}")
 
     # -------------------------------------------------------------------------
     # Public API

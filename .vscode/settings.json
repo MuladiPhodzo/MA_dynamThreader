@@ -32,5 +32,6 @@
             "connectionTimeout": 60,
             "password": ""
         }
-    ]
+    ],
+    "makefile.makefilePath": "C:\\Users\\Ras51111\\Documents\\myProjects\\MovingAverage_Advisor\\makefile"
 }

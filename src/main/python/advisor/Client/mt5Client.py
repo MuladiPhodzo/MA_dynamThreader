@@ -1,19 +1,17 @@
 from dateutil.relativedelta import relativedelta
-import os
-import datetime
+
 import time
-import csv
-import json
 import sys
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import datetime
 
 import matplotlib.pyplot as plt
 from tkinter import messagebox
 import pandas as pd
 from pandas.plotting import register_matplotlib_converters
 import MetaTrader5 as mt5
-from advisor.Threads.ThreadHandler import ThreadHandler
+from utils import dataHandler as utils
 register_matplotlib_converters()
 
 # -------------------------
@@ -40,13 +38,12 @@ TF_dict = {
     '1D': mt5.TIMEFRAME_D1,
 }
 class MetaTrader5Client:
-    def __init__(self, timeframes=None, thread_handler: ThreadHandler = None):
+    def __init__(self, timeframes=None):
         self.symbols = []
         self.data = pd.DataFrame()
         self.THRESHOLD = 0.0100
         self.account_info = None
         self.terminal_info = None
-        self.threader = thread_handler
         self.data_executor = ThreadPoolExecutor(max_workers=5)
         self.TF = {}
         if timeframes:
@@ -56,15 +53,13 @@ class MetaTrader5Client:
 
     def _determine_bar_count(self, timeframe):
         if timeframe in ("1M", "5M", "15M"):
-            return 5000
+            return 3000
         if timeframe in ("30M", "1H", "2H"):
             return 2500
         if timeframe in ("4H", "6H", "8H"):
-            return 1000
+            return 1500
         if timeframe in ("1D",):
             return 500
-        if timeframe in ("1W", "1MN"):
-            return 300
         return 1000
 
     def _configTF(self, timeframes):
@@ -196,17 +191,15 @@ class MetaTrader5Client:
 
         return multi_tf_data
 
-    def get_multi_tf_data(self, symbol):
+    def get_multi_tf_data(self, symbol, data_handler: utils.dataHandler):
         """
-        Efficient parallel multi-timeframe data fetcher.
+        parallel multi-timeframe data fetcher.
         Returns: {"1M": df, "5M": df, ...}
         """
         try:
             logger.info(f"⏳ Fetching multi-timeframe data for {symbol}...")
 
             futures = {}
-            results = {}
-
             # Submit fetch tasks to executor
             for tf_name, tf_value in TF_dict.items():
                 futures[self.data_executor.submit(
@@ -223,17 +216,16 @@ class MetaTrader5Client:
 
                 try:
                     df = future.result()
-                    results[tf_name] = df
+                    data_handler.update(tf_name, df)
 
                 except Exception as e:
                     logger.error(f"❌ Error fetching {symbol} {tf_name}: {e}")
-                    results[tf_name] = None
-
+                    return False
             logger.info(f"✅ Completed fetching multi-timeframe data for {symbol}.")
+            return True
         except Exception as e:
             logger.exception(f'error fetching multi timeframe threads : {e}')
-        finally:
-            return results
+            return False
 
     def close(self):
         """ Close the MT5 connection.
@@ -242,111 +234,6 @@ class MetaTrader5Client:
         logger.info("🔌 Disconnected from MetaTrader 5.")
         return False
 
-
-class dataHandler:
-    def save_trade(self, trade_data, file_type="json"):
-        """
-        Saves trade information to a file (JSON or CSV).
-
-        Args:
-            trade_data (dict): Trade details to save.
-            file_type (str): 'json' or 'csv'.
-        """
-        # Ensure trades directory exists
-        os.makedirs("trades", exist_ok=True)
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-
-        if file_type.lower() == "json":
-            file_path = "trades/trades_log.json"
-            self._toJSON(file_path, trade_data, timestamp)
-
-        elif file_type.lower() == "csv":
-            file_path = "trades/trades_log.csv"
-            self._toCSV(file_path, trade_data, timestamp)
-
-        else:
-            raise ValueError("Unsupported file type. Use 'json' or 'csv'.")
-
-    def _toJSON(self, file_path, trade_data, timestamp):
-        """Helper method for JSON saving"""
-        entry = {"timestamp": timestamp, **trade_data}
-
-        if os.path.exists(file_path):
-            try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            except json.JSONDecodeError:
-                data = []
-        else:
-            data = []
-
-        data.append(entry)
-
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4)
-
-        logger.info(f"✅ Trade saved to {file_path}")
-
-    def _toCSV(self, file_path, trade_data):
-        import datetime
-        """Helper method for CSV saving"""
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        entry = {"timestamp": timestamp, **trade_data}
-        file_exists = os.path.exists(file_path)
-
-        with open(file_path, "a", newline='', encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=entry.keys())
-            if not file_exists:
-                writer.writeheader()
-            writer.writerow(entry)
-        logger.info(f"✅ Trade saved to {file_path}")
-
-    def toCSVFile(self, data, file_path):
-        import tabulate
-        """
-        Save data to a CSV + formatted TXT table.
-        - Creates directories if missing.
-        - Writes CSV safely (create or append).
-        - Writes a formatted pretty table using 'tabulate'.
-        """
-
-        # Ensure data is not empty
-        if data is None or len(data) == 0:
-            logger.warning(f"No data to write for file {file_path}. Skipping.")
-            return
-
-        df = pd.DataFrame(data)
-
-        # Auto-create folder if it doesn't exist
-        folder = os.path.dirname(file_path)
-        os.makedirs(folder, exist_ok=True)
-
-        file_exists = os.path.exists(file_path)
-
-        # ============================
-        # 1️⃣ SAVE RAW CSV
-        # ============================
-        if file_exists:
-            logger.info(f"Appending to existing CSV: {file_path}")
-            df.to_csv(file_path, index=False, mode='a', header=False)
-        else:
-            logger.info(f"Creating new CSV: {file_path}")
-            df.to_csv(file_path, index=False, mode='w', header=True)
-
-        # ============================
-        # 2️⃣ SAVE PRETTY TABLE (TXT)
-        # ============================
-
-        pretty_text = tabulate.tabulate(df, headers='keys', tablefmt='pretty', showindex=False)
-
-        table_path = file_path.replace(".csv", "_pretty.txt")
-
-        with open(table_path, "a", encoding="utf-8") as f:
-            f.write(pretty_text)
-            f.write("\n\n")  # spacing between writes
-
-        logger.info(f"📄 Pretty table saved to {table_path}")
-        logger.info("✅ Data saved successfully to both CSV + Pretty Table.")
 
 class DataPlotter:
 
@@ -376,7 +263,7 @@ class DataPlotter:
         plt.show()
 
     @staticmethod
-    def plot_charts(rates, entries, fast_period, slow_period):
+    def plot_charts(rates, fast_period, slow_period):
         if rates is None:
             raise ValueError(
                 "Error: `self.results` is None. Run `backtest_strategy()` before plotting.")
@@ -400,8 +287,8 @@ class DataPlotter:
                  label=f"Slow MA ({slow_period})", color='red')
 
         # Plot buy/sell signals
-        buy_signals = rates.loc[rates['Crossover'] == 2]
-        sell_signals = rates.loc[rates['Crossover'] == -2]
+        buy_signals = rates.loc[rates['Entry'] == "Buy"]
+        sell_signals = rates.loc[rates['Entry'] == "Sell"]
 
         plt.plot(buy_signals.index, buy_signals['Fast_MA'], '^',
                  color='green', markersize=12, label="Buy Signal")
@@ -410,15 +297,15 @@ class DataPlotter:
 
         # Plot SL/TP levels
         for i in buy_signals.index:
-            plt.hlines(rates.loc[i, 'StopLoss'], i, i + 5, colors='red',
+            plt.hlines(rates.loc[i, 'SL'], i, i + 5, colors='red',
                        linestyles='dashed', label="SL" if i == buy_signals.index[0] else "")
-            plt.hlines(rates.loc[i, 'TakeProfit'], i, i + 5, colors='green',
+            plt.hlines(rates.loc[i, 'TP'], i, i + 5, colors='green',
                        linestyles='dashed', label="TP" if i == buy_signals.index[0] else "")
 
         for i in sell_signals.index:
-            plt.hlines(rates.loc[i, 'StopLoss'], i, i + 5,
+            plt.hlines(rates.loc[i, 'SL'], i, i + 5,
                        colors='red', linestyles='dashed')
-            plt.hlines(rates.loc[i, 'TakeProfit'], i, i + 5,
+            plt.hlines(rates.loc[i, 'TP'], i, i + 5,
                        colors='green', linestyles='dashed')
 
         plt.title('Moving Average Crossover Signals with SL/TP')

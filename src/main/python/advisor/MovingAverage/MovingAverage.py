@@ -1,11 +1,12 @@
-import os
 import sys
 import logging
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
+import tabulate
+import MetaTrader5 as mt5
 
-import advisor.Client.mt5Client as mt5Client
+import advisor.utils.dataHandler as utils
+from advisor.utils.cache import CacheManager
 
 # -------------------------
 # Logging Configuration
@@ -20,13 +21,25 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+TF_dict = {
+    '15M': mt5.TIMEFRAME_M15,
+    '30M': mt5.TIMEFRAME_M30,
+    '1H': mt5.TIMEFRAME_H1,
+    '2H': mt5.TIMEFRAME_H2,
+    '4H': mt5.TIMEFRAME_H4,
+    '6H': mt5.TIMEFRAME_H6,
+    '8H': mt5.TIMEFRAME_H8,
+    '1D': mt5.TIMEFRAME_D1,
+}
 class MovingAverageCrossover:
 
     def __init__(self,
                  symbol,
-                 data: dict,
+                 caching: CacheManager = None,
+                 data_handler: utils.dataHandler = None,
                  fast_period=50,
-                 slow_period=150):
+                 slow_period=150,
+                 pip_distance=250):
         """
         Initialize the strategy with data and parameters.
 
@@ -35,107 +48,139 @@ class MovingAverageCrossover:
         :param slow_period: Period for the slow-moving average.
         """
         self.symbol = symbol
-        self.data = data
+        self.cache = caching
         self.fast_period = fast_period
         self.slow_period = slow_period
+        self.pip_distance = pip_distance
 
         self.signals = {}
         self.results = {}
-        self.data_handler = mt5Client.dataHandler()  # Reuse existing CSV saving method
+        self.data_handler = data_handler
+
+        try:
+            self.pip_size = self.get_pip_size(self.data_handler.get('30M'))
+        except Exception:
+            self.pip_size = 0.0001
+
+            # decide threshold scaling: keep configurable via pip_distance
+            self.threshold = pip_distance * self.pip_size
 
     # ------------------------------------------------------
-    # 1) Moving Averages per timeframe
+    # Helper Methods
     # ------------------------------------------------------
-    def calculate_moving_averages(self):
+    def _clean_value(self, v):
+        """Convert numpy types or pandas types to native Python."""
+        if hasattr(v, "item"):
+            return v.item()
+        return float(v) if isinstance(v, (np.floating, np.float64)) else v
+
+    def _classify_bullish_trend(self, count: int, ls_len: int, prox_true: int) -> str:
+        """Classify bullish trend strength."""
+        if count >= (ls_len - 2) and prox_true >= max(3, ls_len - 1):
+            return "(S)Bullish"
+        if count >= 5 and prox_true >= 5:
+            return "Bullish"
+        return "(W)Bullish"
+
+    def _classify_bearish_trend(self, count: int, ls_len: int, prox_true: int) -> str:
+        """Classify bearish trend strength."""
+        if abs(count) >= (ls_len - 2) and prox_true >= max(3, ls_len - 1):
+            return "(S)Bearish"
+        if abs(count) >= 5 and prox_true >= 5:
+            return "Bearish"
+        return "(W)Bearish"
+
+    def sequence_trend_alignment(self, mtf_row_data: dict) -> str:
         """
-        Calculates Fast_MA, Slow_MA, Signal, Crossover, Bias
-        for EACH timeframe DataFrame inside a dictionary.
+        Evaluate multi-timeframe trend alignment.
+        mtf_row_data structure:
+        {
+            "1H": {"Slow_MA": float, "Fast_MA": float, "Proximity": bool},
+            "30M": {...},
+            ...
+        }
         """
 
+        try:
+            if not mtf_row_data:
+                return "Neutral"
+
+            ls_len = len(mtf_row_data)
+            prox_meter = []
+            count = 0
+
+            for tf, row in mtf_row_data.items():
+                # Collect proximity boolean
+                prox_meter.append(bool(row["Proximity"]))
+
+                # Count trend direction: +1 = bullish, -1 = bearish
+                if row["Slow_MA"] > row["Fast_MA"]:
+                    count -= 1
+                else:
+                    count += 1
+
+            prox_true = prox_meter.count(True)
+            majority = ls_len // 2 + 1
+
+            if count >= majority:
+                return self._classify_bullish_trend(count, ls_len, prox_true)
+            elif count <= -majority:
+                return self._classify_bearish_trend(count, ls_len, prox_true)
+
+            return "Neutral"
+
+        except Exception as e:
+            logger.exception(f"exception in trend alignment: {e}")
+            return "Error"
+
+    def _build_all_timestamps(self):
+        """Build a unified set of timestamps from all TF data."""
+        all_timestamps = set()
         for tf, df in self.data.items():
-            # Skip the Main Trend key
-            if df is None:
-                logger.warning(f'{self.symbol} {tf} is None: {df}')
+            if isinstance(df, pd.DataFrame) and "Slow_MA" in df.columns:
+                all_timestamps.update(df.index)
+        return sorted(all_timestamps) if all_timestamps else None
+
+    def _build_mtf_row_data(self, ts):
+        """Build multi-timeframe snapshot for a given timestamp."""
+        mtf_row_data = {}
+        for tf, df in self.data_handler.data.items():
+            if tf == "Main_Trend" or df is None or not isinstance(df, pd.DataFrame):
+                continue
+            if ts not in df.index:
                 continue
 
-            if tf == "Main_Trend":
+            row = df.loc[ts]
+            if not all(col in row for col in ["Slow_MA", "Fast_MA", "Proximity"]):
                 continue
 
-            if 'close' not in df.columns:
-                raise ValueError(f"{tf} data is missing a 'close' column.")
+            mtf_row_data[tf] = {
+                "timestamp": ts,
+                "Slow_MA": row["Slow_MA"],
+                "Fast_MA": row["Fast_MA"],
+                "Proximity": row["Proximity"],
+            }
+        return mtf_row_data
 
-            df['Fast_MA'] = df['close'].rolling(
-                window=self.fast_period).mean().shift(1)
-            df['Slow_MA'] = df['close'].rolling(
-                window=self.slow_period).mean().shift(1)
+    def _write_main_trend_to_ltf(self, ts, main_trend):
+        """Write Main_Trend back into required LTF rows that match timestamp."""
+        for tf in ["15M", "30M"]:
+            if tf in self.data and ts in self.data[tf].index:
+                self.data[tf].loc[ts, "Bias"] = main_trend
 
-            df['Signal'] = np.where(
-                df['Fast_MA'] > df['Slow_MA'], 1,
-                np.where(df['Fast_MA'] < df['Slow_MA'], -1, 0)
-            )
-
-            df['Crossover'] = df['Signal'].diff()
-
-            df['Bias'] = np.where(
-                df['Fast_MA'] > df['Slow_MA'], "Bullish", "Bearish"
-            )
-
-            # Clean NaN rows
-            self.data[tf] = df.dropna()
-        self.identify_Main_Trend_Alignment()
-
-        logger.info(f"📊 MA indicators calculated for all timeframes ({self.symbol})")
-        return self.data
-
-    # ------------------------------------------------------
-    # 2) Proximity Entry Signals (per timeframe)
-    # ------------------------------------------------------
-    def identify_proximity_entries(self, pip_distance=250):
-        """
-        Identifies BUY & SELL proximity entries for 15min & 30min timeframes.
-        """
-        for tf, df in self.data.items():
-            # Skip the Main Trend key
-            if df is None:
-                logger.warning(f'{self.symbol} {tf}: data is none == {df}')
-                continue
-
-            if tf == "Main_Trend" or tf == "D1":
-                continue
-            copyDF = df.copy()
-            pip_size = self.get_pip_size(df['close'].iloc[-1])
-            threshold = pip_distance * pip_size
-
-            copyDF.loc[:, 'Proximity'] = abs(copyDF['close'] - copyDF['Slow_MA']) <= threshold
-            if "M" in tf:
-                copyDF['Entry'] = None
-                copyDF['SL'] = np.nan
-                copyDF['TP'] = np.nan
-                for i, row in copyDF.iterrows():
-                    entry_price = row['close']
-                    if not row['Proximity']:
-                        continue
-                    # BUY
-                    if self.data["Main_Trend"] == "Bullish":
-                        if row['Fast_MA'] > row['Slow_MA']:
-                            df.loc[i, 'Entry'] = "Buy"
-                            df.loc[i, 'SL'] = entry_price - (pip_distance * pip_size)
-                            df.loc[i, 'TP'] = entry_price + (2 * pip_distance * pip_size)
-                    # SELL
-                    elif self.data["Main_Trend"] == "Bearish":
-                        if row['Fast_MA'] < row['Slow_MA']:
-                            df.loc[i, 'Entry'] = "Sell"
-                            df.loc[i, 'SL'] = entry_price + (pip_distance * pip_size)
-                            df.loc[i, 'TP'] = entry_price - (2 * pip_distance * pip_size)
-                    else:
-                        continue
-                df = copyDF
-
-            self.data[tf] = df
-        self.sequence_data()
-
-        logger.info(f"🎯 Proximity entries generated for all timeframes ({self.symbol})")
-        return self.data
+    def get_pip_size(self, df: pd.DataFrame):
+        """Auto-detect pip size from number of decimals in price."""
+        price = float(df["close"].dropna().iloc[-1])
+        price_str = str(price)
+        if "." in price_str:
+            decimals = len(price_str.split(".")[1])
+            # 2 or 3 decimals → JPY pairs (0.01, 0.001)
+            # 4 or 5 decimals → normal pairs (0.0001, 0.00001)
+            if decimals in [2, 3]:
+                return 0.01
+            elif decimals in [4, 5]:
+                return 0.0001
+        return 0.0001  # fallback
 
     def _evaluate_trade_outcome(self, df, entry_pos, entry_type, entry_price, sl, tp, pip_size):
         """
@@ -171,8 +216,206 @@ class MovingAverageCrossover:
         # If never hit SL/TP — optional behavior
         return "NoHit", entry_price, None
 
+    def sequence_Trend_Data(self, all_timestamps):
+        """
+        Timestamp-aligned multi-timeframe trend evaluation.
+
+        For every unique timestamp across all timeframes:
+            - Build snapshot of (Slow_MA, Fast_MA, Proximity)
+            - Compute MTF Main_Trend
+            - Insert Main_Trend into 15M & 30M rows that match that timestamp
+        """
+
+        try:
+
+            if not self.data_handler.all_timestamps:
+                logger.warning(f"{self.symbol}: No timestamps found for MTF alignment.")
+                return
+
+            for ts in self.data_handler.all_timestamps:
+                mtf_row_data = self._build_mtf_row_data(ts)
+
+                if len(mtf_row_data) == 0:
+                    continue
+
+                main_trend = self.sequence_trend_alignment(mtf_row_data)
+                self._write_main_trend_to_ltf(ts, main_trend)
+
+            logger.info(f"✔ Timestamp-aligned MTF Main_Trend computed for {self.symbol}")
+
+        except Exception as e:
+            logger.exception(f"Exception in timestamp-based sequence_data: {e}")
     # ------------------------------------------------------
-    # 3) Backtesting per timeframe
+    # Main Methods
+    # ------------------------------------------------------
+
+    # ------------------------------------------------------
+    # 1) Moving Average Value (per timeframe)
+    # ------------------------------------------------------
+    def calculate_moving_averages_data(self, tf):
+        """
+        Calculate Fast/Slow MA and derived columns per timeframe.
+        - Validates 'close' column
+        - Ensures datetime index
+        - Keeps frames even if some rows are NaN (avoid aggressive dropna)
+        """
+        df = self.data_handler.get(tf)
+        # Skip non-dataframes & placeholder keys
+        if df is None or not isinstance(df, pd.DataFrame):
+            return False
+
+        if 'close' not in df.columns:
+            logger.warning(f"{self.symbol} {tf} missing 'close' column — skipping TF.")
+            return False
+
+        # Ensure datetime index if 'time' exists
+        if 'time' in df.columns and not isinstance(df.index, pd.DatetimeIndex):
+            try:
+                df = df.copy()
+                df['time'] = pd.to_datetime(df['time'], unit='s', errors='coerce')
+                df.set_index('time', inplace=True)
+            except Exception:
+                # leave index as-is if conversion fails
+                pass
+
+        # Compute MAs — shift by 1 to avoid lookahead
+        df = df.copy()
+        try:
+            # moving average values
+            df.loc[:, 'Fast_MA'] = df['close'].rolling(window=self.fast_period, min_periods=1).mean().shift(1)
+            df.loc[:, 'Slow_MA'] = df['close'].rolling(window=self.slow_period, min_periods=1).mean().shift(1)
+            # Signal values
+            df.loc[:, 'Signal'] = np.where(df['Fast_MA'] > df['Slow_MA'], 1, np.where(df['Fast_MA'] < df['Slow_MA'], -1, 0))
+            df.loc[:, 'Crossover'] = df['Signal'].diff()
+            df.loc[:, 'Bias'] = np.where(df['Fast_MA'] > df['Slow_MA'], "Bullish", "Bearish")
+            # Vectorized proximity calculation and safe fill
+            df.loc[:, 'Proximity'] = (df['close'] - df['Slow_MA']).abs() <= self.threshold
+
+        except Exception as e:
+            logger.exception(f"exception in proximity calculation for {self.symbol} {tf}: {e}")
+        # Keep the frame but mark rows where MA values are missing
+        if self.verify_fields():
+            return True, df
+        return False
+
+    # ------------------------------------------------------
+    # 2) Check Proximity (per timeframe)
+    # ------------------------------------------------------
+    def verify_fields(self, tf, df):
+        """
+        Ensure each timeframe has a {'Slow_MA', 'Fast_MA' 'Proximity'} column.
+        Uses a TF-aware threshold via pip size; fills missing values safely.
+        """
+        try:
+
+            if df is None or not isinstance(df, pd.DataFrame):
+                logger.warning(f"{self.symbol} {tf} is None or not a DataFrame, instance == {type(df)}")
+                raise ValueError("df missing critical computational fields")
+
+            # Ensure required MA columns exist
+            if not {'Slow_MA', 'Fast_MA', "Proximity"}.issubset(df.columns):
+                logger.warning(f"{self.symbol} {tf} missing MA columns; creating with NaN.")
+                for col in ['Fast_MA', 'Slow_MA', 'Proximity']:
+                    if col not in df.columns:
+                        df[col] = np.nan
+                return False
+
+            logger.info(f"🎯 Proximity check completed for all timeframes ({self.symbol})")
+            # NOTE: do not auto-run sequence_data here if caller wants control
+            return True
+        except Exception as e:
+            logger.exception(f"exception in proximity check: {e}")
+            return False
+
+    # ------------------------------------------------------
+    # 3) Check Main Trend Alignment from higher timeframes
+    # ------------------------------------------------------
+    def identify_Main_Trend_Alignment(self):
+        """
+        Compute an overall Main_Trend label based on latest row of each TF.
+        Defensive: skips empty / invalid TFs.
+        """
+        try:
+            count = 0
+            valid_tfs = 0
+
+            for tf, df in list(self.data.items()):
+                if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+                    continue
+                latest = df.iloc[-1]
+                if pd.isna(latest.get("Fast_MA")) or pd.isna(latest.get("Slow_MA")):
+                    continue
+                valid_tfs += 1
+                if latest["Slow_MA"] > latest["Fast_MA"]:
+                    count -= 1
+                else:
+                    count += 1
+
+            if valid_tfs == 0:
+                self.data["Bias"] = "Unknown"
+                return "Unknown"
+
+            # strong alignment: absolute count equals number of valid TFs
+            if abs(count) == valid_tfs:
+                self.data["Bias"] = "Bullish" if count > 0 else "Bearish"
+            else:
+                self.data["Bias"] = "No Trend Alignment"
+            logger.info(f"{self.symbol} Main_Trend identified: {self.data['Bias']}")
+            return self.data["Bias"]
+
+        except Exception as e:
+            logger.exception(f"exception in Trend alignment: {e}")
+            self.data["Bias"] = "Error"
+            return "Error"
+
+    # ------------------------------------------------------
+    # 3) Proximity Entry Signals (per timeframe)
+    # ------------------------------------------------------
+    def identify_proximity_entries(self, pip_distance=250):
+        """
+        Identifies BUY & SELL proximity entries for 15min & 30min timeframes.
+        """
+        for tf, df in self.data.items():
+            # Skip the Main Trend key
+            if df is None:
+                logger.warning(f'{self.symbol} {tf}: data is none == {df}')
+                continue
+
+            if "M" not in tf or tf == "Bias":
+                continue
+            copyDF = df.copy()
+            pip_size = self.get_pip_size(df['close'].iloc[-1])
+
+            copyDF['Entry'] = None
+            copyDF['SL'] = np.nan
+            copyDF['TP'] = np.nan
+            for i, row in copyDF.iterrows():
+                entry_price = row['close']
+                if not row['Proximity']:
+                    continue
+                # BUY
+                if "Bullish" in df.loc[i, "Bias"]:
+                    if row['Fast_MA'] > row['Slow_MA']:
+                        df.loc[i, 'Entry'] = "Buy"
+                        df.loc[i, 'SL'] = entry_price - (pip_distance * pip_size)
+                        df.loc[i, 'TP'] = entry_price + (2 * pip_distance * pip_size)
+                # SELL
+                elif "Bearish" in df.loc[i, "Bias"]:
+                    if row['Fast_MA'] < row['Slow_MA']:
+                        df.loc[i, 'Entry'] = "Sell"
+                        df.loc[i, 'SL'] = entry_price + (pip_distance * pip_size)
+                        df.loc[i, 'TP'] = entry_price - (2 * pip_distance * pip_size)
+                else:
+                    continue
+                df = copyDF
+
+            self.data[tf] = df
+
+        logger.info(f"🎯 Proximity entries generated for all timeframes ({self.symbol})")
+        return self.data
+
+    # ------------------------------------------------------
+    # 5) Backtesting per timeframe
     # ------------------------------------------------------
     def backtest_entries(self, pip_distance=100, tp_factor=2):
         """
@@ -194,7 +437,7 @@ class MovingAverageCrossover:
                 logger.warning(f'{self.symbol} {tf} is None: {df}')
                 continue
 
-            if tf == "Main_Trend" or not isinstance(df, pd.DataFrame):
+            if tf not in ["15M", "30M"] or not isinstance(df, pd.DataFrame):
                 continue
 
             # Skip TFs without Entry column (H1, H4, etc.)
@@ -217,7 +460,7 @@ class MovingAverageCrossover:
             for pos, (idx, row) in enumerate(df.iterrows()):
 
                 entry_type = row["Entry"]
-                if entry_type not in ("Buy", "Sell"):
+                if entry_type not in ("Buy", "Sell") or "(W)" in row["Bias"]:
                     continue
 
                 entry_price = row["close"]
@@ -270,20 +513,13 @@ class MovingAverageCrossover:
 
             # Save updated DataFrame back to storage
             self.data[tf] = df
-
+            self.data_handler.toCSVFile(df, f"src/main/python/Advisor/Logs/{self.symbol}_data/{tf}_backtest.csv")
             # Also save summary results
             all_results[tf] = pd.DataFrame(trades)
             logger.info(f"[{self.symbol}][{tf}] Backtest complete — {len(all_results[tf])} trades updated.")
 
         self.results = all_results
-        logger.info(f"📊 [{self.symbol}] Backtests updated in DF for all timeframes ({self.symbol})")
         return self.results
-
-    def _clean_value(self, v):
-        """Convert numpy types or pandas types to native Python."""
-        if hasattr(v, "item"):
-            return v.item()
-        return float(v) if isinstance(v, (np.floating, np.float64)) else v
 
     def generate_backtest_summary(self):
         """
@@ -318,7 +554,6 @@ class MovingAverageCrossover:
 
             avg_win = wins["PnL_Pips"].mean() if not wins.empty else 0
             avg_loss = losses["PnL_Pips"].mean() if not losses.empty else 0
-            self.data_handler.toCSVFile(df, f"src/main/python/Advisor/Logs/{self.symbol}_data/{tf}_backtest.csv")
             rr_ratio = abs(avg_win / avg_loss) if avg_loss else float("inf")
 
             expectancy = (
@@ -409,202 +644,51 @@ class MovingAverageCrossover:
         logger.info("📊 Clean backtest summary generated.")
         return summary
 
-    def identify_Main_Trend_Alignment(self):
-        try:
-            count = 0  # count should equal 8 for successful trend alignnment
-            for tf, df in self.data.items():
-                current = df.iloc[-1]
-                if current["Slow_MA"] > current["Fast_MA"]:
-                    count -= 1
-                else:
-                    count += 1
-            if abs(count) == len(self.data):
-                if count > 0:
-                    self.data["Main_Trend"] = "Bullish"
-                else:
-                    self.data["Main_Trend"] = "Bearish"
-            else:
-                self.data["Main_Trend"] = "No Trend Alignment"
-            count = 0
-        except Exception as e:
-            logger.exception(f"exception in Trend alignment: {e}")
-            self.data['Main_Trend'] = ""
-
-    def sequence_trend_alignmemt(self, mtf_row_data: dict) -> str:
-        try:
-            count = 0
-            ls_len = len(mtf_row_data)
-
-            prox_meter = [bool]
-            for tf, df in mtf_row_data.items():
-                prox_meter.append(df["Proximity"])
-                if df["Slow_MA"] > df["Fast_MA"]:
-                    count -= 1
-                else:
-                    count += 1
-
-            if count > 0:
-                if count in range(ls_len - 2, ls_len) and prox_meter.count(True) >= 6:
-                    return "(S)Bullish"
-                elif count == 5 and prox_meter.count(True) == 5:
-                    return "Bullish"
-                elif count in range(ls_len / 2) and prox_meter.count(True) <= 4:
-                    return "(W)Bullish"
-            else:
-                if (abs(count) in range(ls_len - 2, ls_len)) and (prox_meter.count(True) >= 6):
-                    return "(S)Bearish"
-                elif (abs(count) == 5) and (prox_meter.count(True) == 5):
-                    return "Bearish"
-                elif (abs(count) in range(ls_len / 2)) and (prox_meter.count(True) <= 4):
-                    return "(W)Bearish"
-        except Exception as e:
-            logger.exception(f"exception in trend alignment: {e}")
-
-    def sequence_data(self):
-        try:
-            mtf_row_data = {}
-            index = 0
-            Main_Trend = ""
-            for tf, df in self.data.items():
-                for pos, (idx, row) in enumerate(df.iterrows()):
-                    current = row.iloc[index, "Slow_MA"][index, "Fast_MA"][index, "Proximity"]
-                    mtf_row_data[tf] = current
-
-                    index = idx
-                Main_Trend = self.sequence_trend_alignmemt(mtf_row_data)
-                if tf in ['15M', '30M']:
-                    df.loc[index, 'Main_Trend'] = Main_Trend
-        except Exception as e:
-            logger.exception(f"exception in sequence data: {e}")
-
-    def get_pip_size(self, price):
-        """Auto-detect pip size from number of decimals in price."""
-        price_str = str(price)
-        if "." in price_str:
-            decimals = len(price_str.split(".")[1])
-            # 2 or 3 decimals → JPY pairs (0.01, 0.001)
-            # 4 or 5 decimals → normal pairs (0.0001, 0.00001)
-            if decimals in [2, 3]:
-                return 0.01
-            elif decimals in [4, 5]:
-                return 0.0001
-        return 0.0001  # fallback
-
-    def save_signals_to_csv(self, data, file_name="src/main/python/advisor/Logs/Rates"):
-        """
-        Save identified entry levels to a CSV file.
-        - Creates the file if it doesn't exist.
-        - Appends to the file if it already exists.
-        """
-
-        if data is not None:
-            file_exists = os.path.isfile(file_name)
-            if not file_exists:
-                data.to_csv(file_name, index=False, mode='w')
-                logger.info(
-                    f"New file created and entry levels saved to {file_name}.")
-            else:
-                data.to_csv(file_name, index=False, mode='a', header=False)
-                logger.info(f"Entry levels appended to existing file {file_name}.")
-        else:
-            logger.info("No signals to save. Please run 'identify_entry_levels()' first.")
-
-    def backtest_strategy(self):
+    def plot_backtest_strategy(self):
         """Backtest the strategy by calculating strategy returns."""
         for tf, df in self.data.items():
             if "M" in tf:
-                df['Position'] = df['Entry'].shift(1)  # Avoid lookahead bias
+                df = df.copy()
+                df['Position'] = df['Entry'].shift(1) if df["Outcome"] == "TP-Hit" else np.nan  # Avoid lookahead bias
                 df['Market_Returns'] = df['close'].pct_change()
                 df['Strategy_Returns'] = df['Market_Returns'] * \
-                    df['Position']
+                    df['Position'] if not pd.isna(df["Position"]) else np.nan
                 df['Cumulative_Market_Returns'] = (1 + df['Market_Returns']).cumprod()
-                df['Cumulative_Strategy_Returns'] = (1 + df['Strategy_Returns']).cumprod()
-                self.results = df.dropna().copy()
+                df['Cumulative_Strategy_Returns'] = (1 + df['Strategy_Returns']).cumprod() if pd.isna(df["Strategy_Returns"]) else np.nan
+                self.results = df.dropna()
         logger.info("Backtest completed.")
         return self.results
 
-    def plot_performance(self):
-        """Visualize the strategy performance against market performance."""
-        if self.results is None:
-            raise ValueError(
-                "No results available. Run backtest_strategy() first.")
-
-        plt.figure(figsize=(12, 6))
-        plt.plot(self.results.index,
-                 self.results['Cumulative_Market_Returns'], label='Market Returns', color='blue')
-        plt.plot(self.results.index,
-                 self.results['Cumulative_Strategy_Returns'], label='Strategy Returns', color='green')
-        plt.title('Moving Average Crossover Strategy Performance')
-        plt.legend()
-        plt.show()
-
-    def plot_charts(self, ltf_data):
-        if 'Entry' not in ltf_data.columns:
-            raise ValueError(
-                "Error: 'Entry' column is missing in `ltf_data`. Check data processing.")
-        if 'close' not in ltf_data.columns or ltf_data['close'].empty:
-            raise ValueError("No Close data available")
-
-        # Ensure both datasets use datetime index for consistency
-        if not isinstance(self.data.index, pd.DatetimeIndex):
-            self.data.index = pd.to_datetime(self.data.index)
-
-        ax = plt.subplots(figsize=(18, 6))
-
-        # Plot market data (uses self.data.index)
-        ax.plot(ltf_data.index, ltf_data['close'],
-                label="Close", color='black')
-        ax.plot(ltf_data.index, ltf_data['Fast_MA'],
-                label=f"Fast MA ({self.fast_period})", color='blue')
-        ax.plot(ltf_data.index, ltf_data['Slow_MA'],
-                label=f"Slow MA ({self.slow_period})", color='red')
-
-        ax.fill_between(ltf_data.index, ltf_data['Fast_MA'], ltf_data['Slow_MA'], where=(
-            ltf_data['Fast_MA'] > ltf_data['Slow_MA']), color='green', alpha=0.3, label='Bullish Zone')
-        ax.fill_between(ltf_data.index, ltf_data['Fast_MA'], ltf_data['Slow_MA'], where=(
-            ltf_data['Fast_MA'] < ltf_data['Slow_MA']), color='red', alpha=0.3, label='Bearish Zone')
-        ax.fill_between(ltf_data.index, ltf_data['Fast_MA'], ltf_data['close'], where=(
-            ltf_data['Fast_MA'] - ltf_data['close'] <= 0.005), color='orange', alpha=0.3, label='Range')
-
-        # Plot Buy signals
-        # buy_signals = ltf_data[ltf_data['Entry'] == 'Buy']
-        # Plot entries and SL/TP
-        for i, row in ltf_data.iterrows():
-            if row['Entry'] == "Buy":
-                plt.scatter(row['time'], row['close'], marker='^',
-                            color='green', label='Buy' if i == 0 else "")
-                plt.hlines(y=row['SL'], xmin=row['time'] - pd.Timedelta(minutes=1), xmax=row['time'] + pd.Timedelta(minutes=1),
-                           color='red', linestyles='--', label='SL' if i == 0 else "")
-                plt.hlines(y=row['TP'], xmin=row['time'] - pd.Timedelta(minutes=1), xmax=row['time'] + pd.Timedelta(minutes=1),
-                           color='green', linestyles='--', label='TP' if i == 0 else "")
-            elif row['Entry'] == "Sell":
-                plt.scatter(row['time'], row['close'], marker='v',
-                            color='red', label='Sell' if i == 0 else "")
-                plt.hlines(y=row['SL'], xmin=row['time'] - pd.Timedelta(minutes=1), xmax=row['time'] + pd.Timedelta(minutes=1),
-                           color='red', linestyles='--', label='SL' if i == 0 else "")
-                plt.hlines(y=row['TP'], xmin=row['time'] - pd.Timedelta(minutes=1), xmax=row['time'] + pd.Timedelta(minutes=1),
-                           color='green', linestyles='--', label='TP' if i == 0 else "")
-
-        plt.title(f"{self.symbol} - Moving Average Proximity Entries")
-        plt.xlabel("Time")
-        plt.ylabel("Price")
-        plt.legend()
-        plt.grid(True)
-        plt.tight_layout()
-        plt.show()
-
-    def run_moving_average_strategy(self, symbol, data):
+    def run_MA_Backtest(self):
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import time
         """
-        Run the Moving Average strategy using historical data.
-        Detect proximity entries and plot them with SL/TP levels.
-
-        Args:
-            symbol (str): Symbol to run strategy on.
-            data (dict): Dictionary with 'HTF' and 'LTF' DataFrames.
+        High-level runner: ensure proximity present, run entries/backtest and summary.
         """
-        self.identify_proximity_entries()
-        self.sequence_data()
-        self.backtest_entries()
-        summary = self.generate_backtest_summary()
+        # ensure proximity is present; check_proximity returns boolean
+        executor = ThreadPoolExecutor()
+        futures = {}
+        for tf, value in TF_dict.items():
+            futures[executor.submit(
+                self.calculate_moving_averages_data,
+                value
+            )] = tf
+            time.sleep(0.2)
 
-        logger.info(f"{self.symbol} strategy performance:\n{summary}")
+        for f in as_completed(futures):
+            tf = futures[f]
+            try:
+                res = f.result()
+                self.cache.set(self.symbol + tf, res[1])
+                return res
+            except Exception as e:
+                logger.exception(f'error fetching multi timeframe threads : {e}')
+                return False
+        # self.identify_proximity_entries()
+        # self.backtest_entries()
+        # tbl_30m = tabulate.tabulate(self.data["30M"], headers='keys', tablefmt='pretty', showindex=False)
+        # tbl_15m = tabulate.tabulate(self.data["15M"], headers='keys', tablefmt='pretty', showindex=False)
+        # print(f"30M:\n{tbl_30m}")
+        # print(f"15M:\n{tbl_15m}")
+        # summary = self.generate_backtest_summary()
+        # logger.info(f"{self.symbol} strategy performance:\n{summary}")

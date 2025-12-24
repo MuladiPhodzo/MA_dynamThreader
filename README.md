@@ -1,3 +1,5 @@
+# 📈 MovingAverage Advisor Bot
+
 ```markdown
 # 📈 MovingAverage Advisor Bot
 
@@ -5,9 +7,40 @@ The **MovingAverage Advisor** is an automated trading bot designed to analyze ma
 
 ---
 
+## High-Level Layer Overview
+
+    ┌────────────────────────────────────────────┐
+    │ 1. Infrastructure Layer                    │
+    ├────────────────────────────────────────────┤
+    │ 2. Data Acquisition Layer                  │
+    ├────────────────────────────────────────────┤
+    │ 3. Data Management Layer                   │
+    ├────────────────────────────────────────────┤
+    │ 4. Feature Engineering Layer               │
+    ├────────────────────────────────────────────┤
+    │ 5. Market Structure & Context Layer        │
+    ├────────────────────────────────────────────┤
+    │ 6. Signal Generation Layer                 │
+    ├────────────────────────────────────────────┤
+    │ 7. Strategy Orchestration Layer            │
+    ├────────────────────────────────────────────┤
+    │ 8. Risk & Trade Management Layer           │
+    ├────────────────────────────────────────────┤
+    │ 9. Execution Layer                         │
+    ├────────────────────────────────────────────┤
+    │ 10. Backtesting & Simulation Layer         │
+    ├────────────────────────────────────────────┤
+    │ 11. Performance & Analytics Layer          │
+    ├────────────────────────────────────────────┤
+    │ 12. Persistence & Reporting Layer          │
+    ├────────────────────────────────────────────┤
+    │ 13. Monitoring & Observability Layer       │
+    └────────────────────────────────────────────┘
+
 ## 🧠 Key Features
 
-- Multi-timeframe (HTF/LTF) strategy support
+- Graphical user interface
+- Multi-timeframe  strategy support
 - Moving Average crossover-based signal generation
 - Automated decision-making and trade execution
 - Threaded execution for handling multiple symbols concurrently
@@ -19,6 +52,7 @@ The **MovingAverage Advisor** is an automated trading bot designed to analyze ma
 ## 📁 Project Structure
 
 ```
+
 MovingAverage_Advisor/
 │
 ├── advisor/                    # Core logic
@@ -54,7 +88,7 @@ MovingAverage_Advisor/
 ├── README.md                  # Project documentation
 └── .pybuilder/                # PyBuilder generated files
 
-```
+```bash
 
 ## 🚀 Getting Started
 
@@ -78,18 +112,17 @@ pip install -r requirements.txt
 pyb clean install
 ```
 
+## 🐳 Running with Docker
 
-### 🐳 Running with Docker
+### Make sure Docker is installed and running
 
-1. **Make sure Docker is installed and running**
-
-2. **Build the image:**
+1. __Build the image:__
 
 ```bash
 docker build -t movingaverage-advisor .
 ```
 
-3. **Run the container:**
+1. __Run the container:__
 
 ```bash
 docker run -it --rm movingaverage-advisor
@@ -113,7 +146,7 @@ You can add multiple symbols and timeframes by editing the `TF` and `symbols` pr
 
 Unit tests are located in:
 
-```
+```bash
 src/unittest/python/
 ```
 
@@ -135,13 +168,13 @@ pyb run_unit_tests
 
 ## 🧠 Author
 
-**Phodzo Lionel Muladi**  
-Email: muladi.lionel@gmail.com  
-LinkedIn: https://www.linkedin.com/in/phodzo-muladi-654214257
+__Phodzo Lionel Muladi__  
+Email: <muladi.lionel@gmail.com>  
+LinkedIn: <https://www.linkedin.com/in/phodzo-muladi-654214257>
 
 ---
 
 ## 📜 License
 
 This project is licensed under the MIT License
-```
+This project is licensed under the MIT License
