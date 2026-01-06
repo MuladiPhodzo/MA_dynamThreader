@@ -1,7 +1,6 @@
 # 📈 MovingAverage Advisor Bot
 
 ```markdown
-# 📈 MovingAverage Advisor Bot
 
 The **MovingAverage Advisor** is an automated trading bot designed to analyze market trends using multi-timeframe moving average crossover strategies. It connects to **MetaTrader 5 (MT5)** and makes buy/sell decisions based on real-time price data and calculated signals.
 
@@ -54,16 +53,22 @@ The **MovingAverage Advisor** is an automated trading bot designed to analyze ma
 ```
 
 MovingAverage_Advisor/
-│
 ├── advisor/                    # Core logic
-│   ├── Advisor.py             # MetaTrader5 client and data handler
-│   ├── RunAdvisorBot.py       # Main bot runner
+|   ├── Client/
+│   |   ├── __init__.py
+|   │   └── mt5Client.py
+|   ├── GUI/
+│   |   ├── __init__.py
+|   │   └── userInput.py
 │   ├── Trade/
+│   |   ├── __init__.py
+│   |   ├── statsManager.py
 │   │   └── TradesAlgo.py      # Trade execution logic
 │   ├── database/
-│   |   ├── MySQLdatabase.py   # Optional DB logging
-|   ├── Telegram/
 │   |   ├── __init__.py
+│   |   └── MySQLdatabase.py   # Optional DB logging
+|   ├── Telegram/
+│   |   └── __init__.py
 │   |       ├── core.py              # main TelegramMessenger (async)
 │   |       ├── runner.py            # bot startup with lock + watchdog
 │   |       ├── handlers/
@@ -75,11 +80,18 @@ MovingAverage_Advisor/
 │   |           ├── logger.py        # rotating logs
 │   |           ├── singleton.py     # PID lock + stale cleanup
 │   |           ├── env_loader.py    # unified .env resolver
-│   |           └── healthcheck.py   # simple health server  
+│   |           └── healthcheck.py   # simple health server
+|   ├── utils/
+|   │   ├── __init__.py
+│   │   ├── cache.py
+│   │   ├── ThreadHandler.py
+│   |   └── dataHandler.py  
 |   │
 |   ├── MovingAverage/
+│   |   ├── __init__.py
 |   │   └── MovingAverage.py       # Strategy implementation
 |   │
+│   └── MA_DynamAdvisor.py       # Main bot runner
 ├── .env
 ├── makefile
 ├── build.py                   # PyBuilder build script
@@ -161,8 +173,11 @@ pyb run_unit_tests
 ## 📝 Todo
 
 - Integrate database logging (MySQL/PostgreSQL)
+- Implement scheduled backtesting
+- Implement Risk management module
 - Add support for alternative strategies
-- Implement backtesting module
+- Implement stats module
+- Implement tracing stoploss
 
 ---
 

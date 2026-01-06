@@ -52,6 +52,18 @@ class CacheManager:
 
             return self.memory[key]
 
+    def get_by_group(self, group_val: str):
+        with self.lock:
+            cache = {}
+            for key, data in self.memory.items():
+                if group_val in key:
+                    if time.time() - self.timestamps.get(key, 0) > self.ttl:
+                        # expired
+                        del self.memory[key]
+                    else:
+                        cache[key] = data
+            return cache
+
     # Save to disk
     def save_cache(self):
         with self.lock:

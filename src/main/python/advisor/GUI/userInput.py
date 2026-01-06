@@ -447,17 +447,19 @@ class UserGUI:
         try:
             with open(CONFIG_FILE, "r") as f:
                 data = json.load(f)
+            configs: dict = data.get("configs")
+            creds: dict = data.get("creds")
 
             # Ensure saved values are clean
             cleaned_data = {
-                "volume": str(data.get("volume", "")),
-                "sl_distance": int(data.get("sl", 150)),
-                "rr_ratio": str(data.get("rr_ratio", "")),
-                "tf_primary": str(data.get("tf_primary", "")),
-                "tf_secondary": str(data.get("tf_secondary", "")),
-                "server": str(data.get("server", "")),
-                "account_id": str(data.get("account_id", "")),  # convert int → string for GUI
-                "password": str(data.get("password", "")),
+                "volume": str(configs.get("volume", "")),
+                "sl_distance": int(configs.get("sl", 150)),
+                "rr_ratio": str(configs.get("rr_ratio", "")),
+                "tf_primary": str(configs.get("tf_primary", "")),
+                "tf_secondary": str(configs.get("tf_secondary", "")),
+                "server": str(creds.get("server", "")),
+                "account_id": str(creds.get("account_id", "")),  # convert int → string for GUI
+                "password": str(creds.get("password", "")),
             }
 
             # Auto-detect widget type (StringVar or Entry)
@@ -501,15 +503,17 @@ class UserGUI:
                 return v
 
             self.user_data = {
-                "volume": clean_value(self.volume.get()),
-                "sl": clean_value(int(self.sl.get())),
-                "rr_ratio": clean_value(self.rr.get()),
-                "tp": self.handleRR(),
-                "tf_primary": clean_value(self.tf_primary.get()),
-                "tf_secondary": clean_value(self.tf_secondary.get()),
-                "server": clean_value(self.server.get()),
-                "account_id": clean_value(int(self.account_id.get())),
-                "password": clean_value(self.password.get()),
+                "creds": {
+                    "server": clean_value(self.server.get()),
+                    "account_id": clean_value(int(self.account_id.get())),
+                    "password": clean_value(self.password.get())},
+                "configs": {
+                    "volume": clean_value(self.volume.get()),
+                    "sl": clean_value(int(self.sl.get())),
+                    "rr_ratio": clean_value(self.rr.get()),
+                    "tp": self.handleRR(),
+                    "tf_primary": clean_value(self.tf_primary.get()),
+                    "tf_secondary": clean_value(self.tf_secondary.get())}
             }
 
             tmp_file = tempfile.NamedTemporaryFile("w", delete=False, dir=os.path.dirname(CONFIG_FILE))

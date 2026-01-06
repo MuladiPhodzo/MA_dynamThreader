@@ -5,14 +5,16 @@ import asyncio
 import os
 import sys
 import time
+import datetime
 import threading
 import queue
 import logging
 import signal
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from utils.ThreadHandler import ThreadHandler
-from utils import dataHandler as utils
-from advisor.utils import cache
+from advisor.utils.ThreadHandler import ThreadHandler
+from advisor.utils import dataHandler as utils
+from advisor.utils.cache import CacheManager as cache
 
 from advisor.Client import mt5Client
 from advisor.MovingAverage import MovingAverage as MA
@@ -44,10 +46,10 @@ class RunAdvisorBot:
 
     def __init__(self):
         # Initialize GUI
+        self.next_cycle = datetime.datetime().now().date()
         self.gui = gui.UserGUI()
         self.gui.set_stop_callback(self.stop_bot)
 
-        self.symbols = []
         self.stop_callback = None
         self.symbol_queue = queue.Queue()  # kept for compatibility but not required now
         self.stop_event = threading.Event()   # global stop
@@ -55,11 +57,12 @@ class RunAdvisorBot:
         self.init = False
         # Thread handler
         self.thread_handler = ThreadHandler(logger=logger.info)
+        self.cache = cache()
         self.data_handler = None
 
         # Initialize MT5 client
         self.client = mt5Client.MetaTrader5Client(self.gui.user_data.get("tf", {}))
-        self.cache = cache.CacheManager()
+        self.symbols = self.client.symbols
         # Start Telegram runner as managed thread
         self.thread_handler.start_thread(
             name="telegram_runner",
@@ -170,10 +173,30 @@ class RunAdvisorBot:
             self.stop_bot()
 
     # -------------------------
-    # Backtesting Logic (unchanged)
+    # Backtesting Logic
     # -------------------------
     def backtest(self, symbols: list):
-        pass
+        if self.client.backtest:
+            symbol_futures = {}
+            sym_dict = {}
+            for symbol in symbols:
+                res_dict = self.client.get_multi_tf_data(symbol, )
+                self.cache.set(symbol, res_dict)
+                Moving_avgs = MA.MovingAverageCrossover(symbol, self.cache)
+                symbol_futures[ThreadPoolExecutor.submit(
+                    Moving_avgs.run_MA_Strategy,
+                    backtest=True,
+                )] = symbol
+
+            self.client.symbols.clear()
+            for f in as_completed(symbol_futures):
+                symbol = symbol_futures[f]
+                res = f.result()
+                if res["win_rate"] > float(78):
+                    sym_dict[symbol] = res
+                    self.client.symbols.append(symbol)
+
+            return sym_dict
 
     # -------------------------
     # Worker Helpers
@@ -189,11 +212,15 @@ class RunAdvisorBot:
                 raise SystemExit
             logger.info(f"▶ {symbol}: Bot resumed.")
 
+    # need to be reconfigured
     def _get_symbol_data(self, symbol) -> bool:
         """Fetch multi-timeframe data for the given symbol."""
         try:
-            res = self.client.get_multi_tf_data(symbol, self.data_handler)
-
+            res = {}
+            if getattr(self.client.cache, "memory", not {}):
+                res = self.data_handler.set_data(self.cache.get(symbol))
+            else:
+                res = self.client.get_multi_tf_data(symbol, self.data_handler)
             if not isinstance(self.data_handler.data, dict) or len(self.data_handler.data) == 0:
                 logger.warning(f"⚠️ Invalid multi-timeframe data received for {symbol}")
                 return res
@@ -215,7 +242,7 @@ class RunAdvisorBot:
         """Calculate MA indicators for every timeframe in the dict."""
         try:
             processed = {}
-            strategy = MA.MovingAverageCrossover(symbol, caching=self.cache, data_handler=self.data_handler)
+            strategy = MA.MovingAverageCrossover(symbol, caching=self.client.cache, data_handler=self.data_handler)
 
             # Calculate MA for ALL timeframes
             res = strategy.calculate_moving_averages_data(self.gui.user_data["sl"])
@@ -278,7 +305,6 @@ class RunAdvisorBot:
 
                 # Also allow the pause_event to block
                 pause_event.wait()
-
                 if (self.stop_event.is_set() or stop_event.is_set()):
                     break
 
@@ -317,16 +343,8 @@ class RunAdvisorBot:
         """Initialize MT5 connection and populate the symbols list. Returns True on success."""
         logger.info("🔄 Initializing MetaTrader5 connection...")
         try:
-            res = self.client.logIn(self.gui.user_data)
-            if not res or not res[0]:
+            if not self.client.logIn(self.gui.user_data):
                 raise ConnectionError("Failed to initialize MetaTrader5. Check credentials or network.")
-
-            self.symbols = res[1] or []
-            logger.info(f"💹 MarketWatch symbols: {self.symbols}")
-            # not using symbol_queue for managed per-symbol threads; keeping for compatibility
-            for sym in self.symbols:
-                self.symbol_queue.put(sym)
-
             return True
 
         except Exception as e:
@@ -387,9 +405,19 @@ class RunAdvisorBot:
     def start_bot_logic(self):
         """Top-level bot start that delegates to smaller helpers."""
         try:
+            
             if not self._mt5_initialize():
                 raise ConnectionError("failed mt5 connection")
 
+            # backtest all symbols on market watch every 3 months
+            if datetime.datetime().now().month != self.next_cycle.month + 3:
+                backtest_symbols = self.backtest(self.client.symbols)
+
+                for sym, dict in backtest_symbols.items():
+                    self.cache.set(sym, dict)
+                next_cycle = datetime.datetime().date().month + 3
+
+            # start bot logic with backtested symbols
             self._start_managed_workers()
             self._wait_for_managed_workers()
         except Exception as e:

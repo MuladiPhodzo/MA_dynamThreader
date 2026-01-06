@@ -8,10 +8,10 @@ import datetime
 
 import matplotlib.pyplot as plt
 from tkinter import messagebox
+
 import pandas as pd
 from pandas.plotting import register_matplotlib_converters
 import MetaTrader5 as mt5
-from utils import dataHandler as utils
 register_matplotlib_converters()
 
 # -------------------------
@@ -40,12 +40,12 @@ TF_dict = {
 class MetaTrader5Client:
     def __init__(self, timeframes=None):
         self.symbols = []
-        self.data = pd.DataFrame()
-        self.THRESHOLD = 0.0100
         self.account_info = None
         self.terminal_info = None
+        self.THRESHOLD = 0.0100
+        self.backtest = True
+
         self.data_executor = ThreadPoolExecutor(max_workers=5)
-        self.TF = {}
         if timeframes:
             self._configTF(timeframes)
         else:
@@ -79,44 +79,34 @@ class MetaTrader5Client:
 
         res = self.initialize(user_data)
 
-        if not res[0]:
+        if not res:
             messagebox.showerror(
                 "Connection failed", f"Failed to log in with error code ={mt5.last_error()}")
             logger.info(f"failed to log in with error code ={mt5.last_error()}")
-            mt5.shutdown()
+            self.close()
             return False
-        messagebox.showinfo("Login successful",
-                            "Connecting to MetaTrader 5....")
-        logger.info(
-            f"✅ Successfully connected to MT5 account {user_data['account_id']} on server '{user_data['server']}'")
-        return res
+        else:
+            logger.info(
+                f"✅ Successfully connected to MT5 account {user_data['account_id']} on server '{user_data['server']}'")
+            self.account_info = mt5.account_info()
+            self.terminal_info = mt5.terminal_info()
+
+            logger.info('fetching all available symbols...')
+            self.symbols = self.get_all_symbols()
+            return True
 
     def initialize(self, user_data):
         try:
             if user_data is not None:
-                logger.info("Initializing MetaTrader 5 with user data...")
                 if not mt5.initialize(login=int(user_data['account_id']),
                                       password=user_data['password'],
                                       server=user_data['server']):
-
-                    logger.info("initialize() failed, error code =", mt5.last_error())
-                    messagebox.showerror(
-                        "Login Error", "Failed to connect to MetaTrader 5.")
-                    mt5.shutdown()
-                    return [False, []]
-
+                    return False
                 else:
-                    logger.info("🚀 Bot is ready to start trading!")
-                    self.account_info = mt5.account_info()
-                    self.terminal_info = mt5.terminal_info()
-
-                    logger.info('searching for available symbols...')
-                    symbols = self.get_Symbols()
-
-                    return [True, symbols]
+                    return True
         except Exception as e:
             logger.info(f"❌ Exception during MT5 initialization: {e}")
-            return [False, []]
+            return False
 
     def check_symbols_availability(self):
         """
@@ -146,6 +136,9 @@ class MetaTrader5Client:
                 symbols.append(symbol.name)
         return symbols
 
+    def get_all_symbols(self) -> list:
+        return mt5.symbols.get()
+
     def get_live_data(self, symbol, timeframe , bars=1000):
         """
         Fetch live market data for a given symbol and timeframe.
@@ -171,37 +164,36 @@ class MetaTrader5Client:
 
         return data
 
-    def get_rates_range(self, symbol):
+    def get_rates_range(self, symbol, tf_name, tf_value):
         multi_tf_data = {}
 
         end_date = datetime.datetime.now()
         start_date = end_date - relativedelta(months=6)
 
-        for tf_name, tf_value in self.TF.items():
-            rates = mt5.copy_rates_range(
-                symbol, tf_value, start_date, end_date)
-            if rates is not None and len(rates) > 0:
-                df = pd.DataFrame(rates)
-                # convert timestamps to datetime
-                df['time'] = pd.to_datetime(df['time'], unit='s')
-                multi_tf_data[tf_name] = df
-            else:
-                logger.info(
-                    f"Failed to retrieve {symbol} rates for {tf_name}, error: {mt5.last_error()}")
+        rates = mt5.copy_rates_range(
+            symbol, tf_value, start_date, end_date)
+        if rates is not None and len(rates) > 0:
+            df = pd.DataFrame(rates)
+            # convert timestamps to datetime
+            df['time'] = pd.to_datetime(df['time'], unit='s')
+            multi_tf_data[tf_name] = df
+        else:
+            logger.info(
+                f"Failed to retrieve {symbol} rates for {tf_name}, error: {mt5.last_error()}")
 
         return multi_tf_data
 
-    def get_multi_tf_data(self, symbol, data_handler: utils.dataHandler):
+    def get_multi_tf_data(self, symbol):
         """
         parallel multi-timeframe data fetcher.
-        Returns: {"1M": df, "5M": df, ...}
+        Returns: {"15M": df, "30M": df, ...}
         """
         try:
             logger.info(f"⏳ Fetching multi-timeframe data for {symbol}...")
-
             futures = {}
             # Submit fetch tasks to executor
             for tf_name, tf_value in TF_dict.items():
+                # fetch all historical data
                 futures[self.data_executor.submit(
                     self.get_live_data,
                     symbol,
@@ -211,18 +203,17 @@ class MetaTrader5Client:
                 time.sleep(0.2)
 
             # Collect results
+            results = {}
             for future in as_completed(futures):
                 tf_name = futures[future]
-
                 try:
                     df = future.result()
-                    data_handler.update(tf_name, df)
-
+                    results[tf_name] = df
                 except Exception as e:
                     logger.error(f"❌ Error fetching {symbol} {tf_name}: {e}")
                     return False
             logger.info(f"✅ Completed fetching multi-timeframe data for {symbol}.")
-            return True
+            return results
         except Exception as e:
             logger.exception(f'error fetching multi timeframe threads : {e}')
             return False

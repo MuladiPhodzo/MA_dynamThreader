@@ -1,11 +1,23 @@
 {
-    "volume": "0.01",
-    "sl": 250,
-    "rr_ratio": "1:3",
-    "tp": 500,
-    "tf_primary": "30M",
-    "tf_secondary": "2H",
-    "server": "XMGlobal-MT5 7",
-    "account_id": 314826552,
-    "password": "N3gus5_8888"
+    "creds": {
+        "server": "XMGlobal-MT5 7",
+        "account_id": 314826552,
+        "password": "N3gus5_8888"
+    },
+    "configs": {
+        "volume": "0.01",
+        "sl": 250,
+        "rr_ratio": "1:3",
+        "tp": 500,
+        "tf_primary": "30M",
+        "tf_secondary": "2H"
+    },
+    "account": {},
+    "symbols": {
+        "USDJPY": {
+            "stats":{},
+            "summary": {}
+        }
+    }
+
 }

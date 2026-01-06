@@ -22,7 +22,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class dataHandler:
-    def __init__(self, data: dict = None, max_bars=3000):
+    def __init__(self, max_bars=3000):
         self.symbol_info = None
         self.all_timestamps = set()
 
@@ -38,6 +38,10 @@ class dataHandler:
 
         self.data[tf] = df
         self.update_timestamps(df)
+
+    def set_data(self, data: dict):
+        for tf, df in data.items():
+            self.update(tf, df)
 
     def get(self, tf: str) -> Optional[pd.DataFrame]:
         return self.data.get(tf)
