@@ -1,3 +1,4 @@
+import threading
 from dateutil.relativedelta import relativedelta
 
 import time
@@ -27,52 +28,44 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
-TF_dict = {
-    '15M': mt5.TIMEFRAME_M15,
-    '30M': mt5.TIMEFRAME_M30,
-    '1H': mt5.TIMEFRAME_H1,
-    '2H': mt5.TIMEFRAME_H2,
-    '4H': mt5.TIMEFRAME_H4,
-    '6H': mt5.TIMEFRAME_H6,
-    '8H': mt5.TIMEFRAME_H8,
-    '1D': mt5.TIMEFRAME_D1,
-}
+
 class MetaTrader5Client:
-    def __init__(self, timeframes=None):
+    def __init__(self):
         self.symbols = []
         self.account_info = None
         self.terminal_info = None
         self.THRESHOLD = 0.0100
         self.backtest = True
 
+        self._tf_last_fetch = {}      # {(symbol, tf): datetime}
+        self._tf_lock = threading.Lock()
+
+        self.TF_dict = {
+            '15M': {"tf_val": mt5.TIMEFRAME_M15, "interval_minutes": 15},
+            '30M': {"tf_val": mt5.TIMEFRAME_M30, "interval_minutes": 30},
+            '1H': {"tf_val": mt5.TIMEFRAME_H1, "interval_minutes": 60},
+            '2H': {"tf_val": mt5.TIMEFRAME_H2, "interval_minutes": 120},
+            '4H': {"tf_val": mt5.TIMEFRAME_H4, "interval_minutes": 240},
+            '6H': {"tf_val": mt5.TIMEFRAME_H6, "interval_minutes": 360},
+            '8H': {"tf_val": mt5.TIMEFRAME_H8, "interval_minutes": 480},
+            '1D': {"tf_val": mt5.TIMEFRAME_D1, "interval_minutes": 1440},
+        }
+
         self.data_executor = ThreadPoolExecutor(max_workers=5)
-        if timeframes:
-            self._configTF(timeframes)
-        else:
-            self._configTF(['30M', '2H'])
 
     def _determine_bar_count(self, timeframe):
-        if timeframe in ("1M", "5M", "15M"):
-            return 3000
-        if timeframe in ("30M", "1H", "2H"):
-            return 2500
-        if timeframe in ("4H", "6H", "8H"):
-            return 1500
-        if timeframe in ("1D",):
-            return 500
-        return 1000
-
-    def _configTF(self, timeframes):
-        try:
-            self.TF['LTF'] = TF_dict[timeframes[0]]
-            self.TF['HTF'] = TF_dict[timeframes[1]]
-            self.TF['Main'] = TF_dict['4H']
-        except KeyError as e:
-            logger.info(
-                f"❌ Invalid timeframe provided: {e}. Using default timeframes 30M and 2H.")
-            self.TF['LTF'] = TF_dict['30M']
-            self.TF['HTF'] = TF_dict['1H']
-            self.TF['Main'] = TF_dict['4H']
+        if self.backtest:
+            if timeframe in ("1M", "5M", "15M") :
+                return 3000
+            if timeframe in ("30M", "1H", "2H"):
+                return 2500
+            if timeframe in ("4H", "6H", "8H"):
+                return 1500
+            if timeframe in ("1D",):
+                return 500
+            return 1000
+        else:
+            return 100
 
     def logIn(self, user_data):
         logger.info("🔑 Logging in to MetaTrader 5...")
@@ -183,40 +176,75 @@ class MetaTrader5Client:
 
         return multi_tf_data
 
+    def _should_fetch_tf(self, symbol: str, tf_name: str) -> bool:
+
+        from datetime import datetime, timedelta
+        """
+        Check if timeframe interval has elapsed.
+        """
+        interval = self.TF_dict[tf_name]["interval_minutes"]
+
+        key = (symbol, tf_name)
+        now = datetime.utcnow()
+
+        with self._tf_lock:
+            last_fetch = self._tf_last_fetch.get(key)
+
+            if last_fetch is None:
+                self._tf_last_fetch[key] = now
+                return True
+
+            if now - last_fetch >= timedelta(minutes=interval):
+                self._tf_last_fetch[key] = now
+                return True
+
+        return False
+
     def get_multi_tf_data(self, symbol):
         """
-        parallel multi-timeframe data fetcher.
-        Returns: {"15M": df, "30M": df, ...}
-        """
-        try:
-            logger.info(f"⏳ Fetching multi-timeframe data for {symbol}...")
-            futures = {}
-            # Submit fetch tasks to executor
-            for tf_name, tf_value in TF_dict.items():
-                # fetch all historical data
-                futures[self.data_executor.submit(
-                    self.get_live_data,
-                    symbol,
-                    tf_value,
-                    self._determine_bar_count(tf_name)
-                )] = tf_name
-                time.sleep(0.2)
+        Interval-aware parallel multi-timeframe fetcher.
+        Fetches ONLY timeframes whose interval has elapsed.
 
-            # Collect results
-            results = {}
-            for future in as_completed(futures):
-                tf_name = futures[future]
-                try:
-                    df = future.result()
+        Returns:
+            dict[str, pd.DataFrame] or empty dict
+        """
+
+        logger.info(f"⏳ Checking timeframes for {symbol}...")
+
+        futures = {}
+        results = {}
+
+        for tf_name, tf_meta in self.TF_dict.items():
+            if not self._should_fetch_tf(symbol, tf_name):
+                continue
+
+            futures[self.data_executor.submit(
+                self.get_live_data,
+                symbol,
+                tf_meta["tf_val"],
+                self._determine_bar_count(tf_name)
+            )] = tf_name
+
+            # Gentle MT5 pacing
+            time.sleep(0.15)
+
+        if not futures:
+            logger.debug(f"⏭ No TF intervals elapsed for {symbol}")
+            return {}
+
+        for future in as_completed(futures):
+            tf_name = futures[future]
+            try:
+                df = future.result()
+                if df is not None and not df.empty:
                     results[tf_name] = df
-                except Exception as e:
-                    logger.error(f"❌ Error fetching {symbol} {tf_name}: {e}")
-                    return False
-            logger.info(f"✅ Completed fetching multi-timeframe data for {symbol}.")
-            return results
-        except Exception as e:
-            logger.exception(f'error fetching multi timeframe threads : {e}')
-            return False
+            except Exception as e:
+                logger.exception(f"❌ {symbol} {tf_name} fetch failed: {e}")
+
+        if results:
+            logger.info(f"✅ Updated TFs for {symbol}: {list(results.keys())}")
+
+        return results
 
     def close(self):
         """ Close the MT5 connection.

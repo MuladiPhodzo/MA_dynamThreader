@@ -7,6 +7,8 @@ import pandas as pd
 import datetime
 from typing import Dict, Optional
 
+from advisor.utils.cache import CacheManager as cacheHandler
+
 # -------------------------
 # Logging Configuration
 # -------------------------
@@ -25,19 +27,44 @@ class dataHandler:
     def __init__(self, max_bars=3000):
         self.symbol_info = None
         self.all_timestamps = set()
+        
+        self.cache_handler = cacheHandler()
 
         self.data : Dict[str, pd.DataFrame] = {}
         self.max_bars = max_bars
 
     def update(self, tf: str, df: pd.DataFrame):
+        """
+        Append new rows into timeframe data instead of replacing.
+        Deduplicates by index, sanitizes, trims, and updates timestamps.
+        """
+
         if df is None or df.empty:
             return
 
         df = self._sanitize(df)
-        df = self._trim(df)
 
-        self.data[tf] = df
-        self.update_timestamps(df)
+        # If timeframe does not exist yet → set directly
+        if tf not in self.data or self.data[tf] is None:
+            self.data[tf] = self._trim(df)
+            self.update_timestamps(df)
+            return
+
+        existing = self.data[tf]
+
+        # Append only NEW rows (index-based)
+        new_rows = df.loc[~df.index.isin(existing.index)]
+
+        if new_rows.empty:
+            return
+
+        # Concatenate + sanitize again (cheap & safe)
+        combined = pd.concat([existing, new_rows])
+        combined = self._sanitize(combined)
+        combined = self._trim(combined)
+
+        self.data[tf] = combined
+        self.update_timestamps(new_rows)
 
     def set_data(self, data: dict):
         for tf, df in data.items():

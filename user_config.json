@@ -12,7 +12,7 @@
         "tf_primary": "30M",
         "tf_secondary": "2H"
     },
-    "account": {},
+    "account_data": {},
     "symbols": {
         "USDJPY": {
             "stats":{},

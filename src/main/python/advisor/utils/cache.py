@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 class CacheManager:
     def __init__(self, cache_file="cache.json", ttl=60):
+
         self.cache_file = Path(cache_file)
         self.ttl = ttl
         self.lock = threading.Lock()
