@@ -2,14 +2,15 @@
 
 ```markdown
 
-The **MovingAverage Advisor** is an automated trading bot designed to analyze market trends using multi-
-timeframe moving average crossover strategies. It connects 
-to **MetaTrader 5 (MT5)** and makes buy/sell decisions based on 
-real-time price data and calculated signals.
+The **MovingAverage Advisor** is an automated trading bot designed to analyze market trends using 
+multi-timeframe moving average crossover strategies. It connects to **MetaTrader 5 (MT5)** and 
+makes buy/sell decisions based on real-time price data and 
+calculated signals.
 
 ---
 
 ## High-Level Layer Overview
+```markdown
 
     ┌────────────────────────────────────────────┐
     │ 1. Infrastructure Layer                    │
@@ -53,7 +54,7 @@ real-time price data and calculated signals.
 
 ## 📁 Project Structure
 
-```
+```bash
 
 MovingAverage_Advisor/
 ├── advisor/                    # Core logic
@@ -103,7 +104,7 @@ MovingAverage_Advisor/
 ├── README.md                  # Project documentation
 └── .pybuilder/                # PyBuilder generated files
 
-```bash
+```
 
 ## 🚀 Getting Started
 
@@ -194,5 +195,4 @@ LinkedIn: <https://www.linkedin.com/in/phodzo-muladi-654214257>
 
 ## 📜 License
 
-This project is licensed under the MIT License
 This project is licensed under the MIT License
