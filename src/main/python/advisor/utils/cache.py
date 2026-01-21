@@ -4,6 +4,8 @@ import time
 from pathlib import Path
 import logging
 import sys
+
+from advisor.utils.locks import CACHE_LOCK
 # -------------------------
 # Logging Configuration
 # -------------------------
@@ -27,7 +29,7 @@ class CacheManager:
         self.lock = threading.Lock()
         self.memory = {}
         self.timestamps = {}
-
+        self.cache_lock = CACHE_LOCK
         self.load_cache()
 
         # background serializer

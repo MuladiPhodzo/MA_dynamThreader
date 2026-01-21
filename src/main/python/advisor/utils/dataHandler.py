@@ -8,7 +8,7 @@ import datetime
 from typing import Dict, Optional
 
 from advisor.utils.cache import CacheManager as cacheHandler
-
+from advisor.utils.locks import CACHE_LOCK, FILE_LOCK, THREAD_LOCK
 # -------------------------
 # Logging Configuration
 # -------------------------
@@ -27,11 +27,20 @@ class dataHandler:
     def __init__(self, max_bars=3000):
         self.symbol_info = None
         self.all_timestamps = set()
-        
+
         self.cache_handler = cacheHandler()
 
         self.data : Dict[str, pd.DataFrame] = {}
         self.max_bars = max_bars
+
+        # 🔒 Locks
+        self.cache_lock = CACHE_LOCK
+        self.file_lock = FILE_LOCK
+        self.thread_lock = THREAD_LOCK
+
+    def cache_set(self, key, value):
+        with self.cache_lock:
+            self.cache_handler.set(key, value)
 
     def update(self, tf: str, df: pd.DataFrame):
         """
@@ -157,19 +166,20 @@ class dataHandler:
                     writer.writeheader()
                 writer.writerow(entry)
             logger.info(f"✅ Trade saved to {file_path}")
-        # Ensure trades directory exists
+
         # Ensure trades directory exists
         os.makedirs("trades", exist_ok=True)
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        if file_type.lower() == "json":
-            file_path = "trades/trades_log.json"
-            _toJSON(file_path, trade_data, timestamp)
+        with self.file_lock:
+            if file_type.lower() == "json":
+                file_path = "trades/trades_log.json"
+                _toJSON(file_path, trade_data, timestamp)
 
-        elif file_type.lower() == "csv":
-            file_path = "trades/trades_log.csv"
-            _toCSV(file_path, trade_data, timestamp)
-        else:
-            raise ValueError("Unsupported file type. Use 'json' or 'csv'.")
+            elif file_type.lower() == "csv":
+                file_path = "trades/trades_log.csv"
+                _toCSV(file_path, trade_data, timestamp)
+            else:
+                raise ValueError("Unsupported file type. Use 'json' or 'csv'.")
 
     def toCSVFile(self, data, file_path):
         import tabulate
@@ -186,34 +196,36 @@ class dataHandler:
             return
 
         df = pd.DataFrame(data)
-
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         # Auto-create folder if it doesn't exist
         folder = os.path.dirname(file_path)
         os.makedirs(folder, exist_ok=True)
 
-        file_exists = os.path.exists(file_path)
+        with self.file_lock:
+            with self.thread_lock:
+                file_exists = os.path.exists(file_path)
 
-        # ============================
-        # 1️⃣ SAVE RAW CSV
-        # ============================
-        if file_exists:
-            logger.info(f"Appending to existing CSV: {file_path}")
-            df.to_csv(file_path, index=False, mode='a', header=False)
-        else:
-            logger.info(f"Creating new CSV: {file_path}")
-            df.to_csv(file_path, index=False, mode='w', header=True)
+                # ============================
+                # 1️⃣ SAVE RAW CSV
+                # ============================
+                if file_exists:
+                    logger.info(f"Appending to CSV: {file_path}")
+                    df.to_csv(file_path, index=False, mode='a', header=False)
+                else:
+                    logger.info(f"Creating CSV: {file_path}")
+                    df.to_csv(file_path, index=False, mode='w', header=True)
 
-        # ============================
-        # 2️⃣ SAVE PRETTY TABLE (TXT)
-        # ============================
+                # ============================
+                # 2️⃣ SAVE PRETTY TABLE (TXT)
+                # ============================
 
-        pretty_text = tabulate.tabulate(df, headers='keys', tablefmt='pretty', showindex=False)
+                pretty_text = tabulate.tabulate(df, headers='keys', tablefmt='pretty', showindex=False)
 
-        table_path = file_path.replace(".csv", "_pretty.txt")
+                table_path = file_path.replace(".csv", "_pretty.txt")
 
-        with open(table_path, "a", encoding="utf-8") as f:
-            f.write(pretty_text)
-            f.write("\n\n")  # spacing between writes
+                with open(table_path, "a", encoding="utf-8") as f:
+                    f.write(f"Timestamp: {timestamp}\n")
+                    f.write(pretty_text + "\n\n")
 
         logger.info(f"📄 Pretty table saved to {table_path}")
         logger.info("✅ Data saved successfully to both CSV + Pretty Table.")

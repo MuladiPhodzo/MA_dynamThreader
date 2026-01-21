@@ -2,7 +2,10 @@
 
 ```markdown
 
-The **MovingAverage Advisor** is an automated trading bot designed to analyze market trends using multi-timeframe moving average crossover strategies. It connects to **MetaTrader 5 (MT5)** and makes buy/sell decisions based on real-time price data and calculated signals.
+The **MovingAverage Advisor** is an automated trading bot designed to analyze market trends using multi-
+timeframe moving average crossover strategies. It connects 
+to **MetaTrader 5 (MT5)** and makes buy/sell decisions based on 
+real-time price data and calculated signals.
 
 ---
 
