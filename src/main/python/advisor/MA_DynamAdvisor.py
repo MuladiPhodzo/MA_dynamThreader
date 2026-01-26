@@ -15,8 +15,8 @@ from advisor.utils.ThreadHandler import ThreadHandler
 from advisor.utils import dataHandler as utils
 from advisor.utils.cache import CacheManager as cache
 
-from advisor.Client import mt5Client
-from advisor.MovingAverage import MovingAverage as MA
+from advisor.mt5_pipeline.Client import mt5Client
+from advisor.indicators.MovingAverage import MovingAverage as MA
 from advisor.Trade import TradesAlgo as algorithim
 from advisor.GUI import userInput as gui
 from advisor.Telegram.runner import run as TelegramRunner
@@ -150,17 +150,16 @@ class RunAdvisorBot:
         except Exception as e:
             logger.warning(f"⚠ Error stopping thread handler: {e}")
 
-        self._stop_gui()
-        self._close_client()
-        self._call_stop_callback()
-
         # Wait for threads to finish gracefully (short timeout)
         try:
             self.thread_handler.wait_for_all(timeout=10)
         except Exception as e:
             logger.warning(f"⚠ Error waiting for threads: {e}")
-
-        logger.info("✅ Bot stop sequence completed.")
+        finally:
+            self._close_client()
+            self._call_stop_callback()
+            self._stop_gui()
+            logger.info("✅ Bot stop sequence completed.")
 
     def on_close(self):
         """Triggered when the GUI window is closed."""
@@ -171,67 +170,6 @@ class RunAdvisorBot:
             pass
         finally:
             self.stop_bot()
-
-    # -------------------------
-    # Backtesting Logic
-    # -------------------------
-    def backtest_all_symbols(self, symbols: list) -> dict:
-        """
-        Backtest all symbols and return performance registry.
-        """
-
-        results = {}
-
-        for symbol in symbols:
-            try:
-                data = self.client.get_multi_tf_data(symbol)
-                strategy = MA.MovingAverageCrossover(symbol, data)
-                performance = strategy.run_MA_Strategy(data, backtest=self.client.backtest)
-                self.cache.set(symbol, performance)
-                results[symbol] = performance
-            except Exception as e:
-                logger.warning(f"Backtest failed for {symbol}: {e}")
-        return results
-
-    def select_best_symbols(self, results: dict, min_win_rate: float = 78.0) -> list:
-        """
-        Select best-performing symbols based on backtest metrics.
-        """
-        return [
-            symbol
-            for symbol, stats in results.items()
-            if stats.get("win_rate", 0) >= min_win_rate
-        ]
-
-    def run_backtest_cycle(self):
-        """
-        Run quarterly backtest and update active symbols.
-        """
-
-        now = datetime.datetime.now()
-
-        if not self.client.backtest:
-            return
-
-        if now == self.next_cycle:
-            return
-
-        logger.info(f"Starting scheduled backtest cycle. date now: {now}, next cycle: {self.next_cycle}")
-
-        results = self.backtest_all_symbols(self.client.symbols)
-        best_symbols = self.select_best_symbols(results)
-
-        # Update registry
-        for sym, stats in results.items():
-            self.cache.set(sym, stats)
-
-        # Activate only best symbols
-        self.client.symbols = best_symbols
-
-        # Schedule next cycle
-        self.next_cycle = now + datetime.timedelta(days=90)
-        self.client.backtest = False
-        logger.info(f"Backtest cycle completed. Next cycle scheduled for {self.next_cycle}.")
 
     # -------------------------
     # Worker Helpers

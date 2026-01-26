@@ -166,7 +166,7 @@ class LogWindow:
         self.summary_container.pack(fill="both", expand=True, pady=10)
 
         self.add_collapsible_section("Change Rates", {
-            "Daily": f"{10}%",
+            "Daily": f"{4}%",
             "Weekly": "+7%",
             "Monthly": "-5%",
         })

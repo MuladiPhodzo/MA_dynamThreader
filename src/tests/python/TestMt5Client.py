@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch, MagicMock, mock_open
 import pandas as pd
 
-from advisor.Client.mt5Client import MetaTrader5Client,  DataPlotter
+from advisor.mt5_pipeline.Client.mt5Client import MetaTrader5Client,  DataPlotter
 
 
 class TestMetaTrader5Client(unittest.TestCase):

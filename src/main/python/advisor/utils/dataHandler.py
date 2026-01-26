@@ -8,7 +8,7 @@ import datetime
 from typing import Dict, Optional
 
 from advisor.utils.cache import CacheManager as cacheHandler
-from advisor.utils.locks import CACHE_LOCK, FILE_LOCK, THREAD_LOCK
+
 # -------------------------
 # Logging Configuration
 # -------------------------
@@ -24,56 +24,56 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class dataHandler:
-    def __init__(self, max_bars=3000):
-        self.symbol_info = None
-        self.all_timestamps = set()
+    def __init__(self, symbol, max_bars=3000):
+        self.symbol = symbol
 
         self.cache_handler = cacheHandler()
 
-        self.data : Dict[str, pd.DataFrame] = {}
+        self.data : Dict[str, pd.DataFrame] = self.get_cache(self.symbol)
+        self.all_timestamps = set(
+            self.all_timestamps.update(df)
+            for tf, df in self.data.items())
+        self.trades = pd.DataFrame()
         self.max_bars = max_bars
 
-        # 🔒 Locks
-        self.cache_lock = CACHE_LOCK
-        self.file_lock = FILE_LOCK
-        self.thread_lock = THREAD_LOCK
-
-    def cache_set(self, key, value):
-        with self.cache_lock:
-            self.cache_handler.set(key, value)
+    def get_cache(self, key):
+        return self.cache_handler.get(key)
 
     def update(self, tf: str, df: pd.DataFrame):
         """
         Append new rows into timeframe data instead of replacing.
         Deduplicates by index, sanitizes, trims, and updates timestamps.
         """
+        with self.thread_lock:
+            if df is None or df.empty:
+                return
 
-        if df is None or df.empty:
-            return
+            df = self._sanitize(df)
 
-        df = self._sanitize(df)
+            # If timeframe does not exist yet → set directly
+            if tf not in self.data or self.data[tf] is None:
+                self.data[tf] = self._trim(df)
+                self.update_timestamps(df)
+                return
 
-        # If timeframe does not exist yet → set directly
-        if tf not in self.data or self.data[tf] is None:
-            self.data[tf] = self._trim(df)
-            self.update_timestamps(df)
-            return
+            existing = self.data[tf]
 
-        existing = self.data[tf]
+            # Append only NEW rows (index-based)
+            new_rows = df.loc[~df.index.isin(existing.index)]
 
-        # Append only NEW rows (index-based)
-        new_rows = df.loc[~df.index.isin(existing.index)]
+            if new_rows.empty:
+                return
 
-        if new_rows.empty:
-            return
+            # Concatenate + sanitize again (cheap & safe)
+            combined = pd.concat([existing, new_rows])
+            combined = self._sanitize(combined)
+            combined = self._trim(combined)
 
-        # Concatenate + sanitize again (cheap & safe)
-        combined = pd.concat([existing, new_rows])
-        combined = self._sanitize(combined)
-        combined = self._trim(combined)
+            self.data[tf] = combined
+            self.update_timestamps(new_rows)
 
-        self.data[tf] = combined
-        self.update_timestamps(new_rows)
+    def add_trade(self, data: pd.DataFrame):
+        self.trades.add(pd.DataFrame(data))
 
     def set_data(self, data: dict):
         for tf, df in data.items():

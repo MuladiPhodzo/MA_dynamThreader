@@ -57,7 +57,8 @@ calculated signals.
 ```bash
 
 MovingAverage_Advisor/
-├── advisor/                    # Core logic
+├── advisor/                            # Core logic
+|   ├──
 |   ├── Client/
 │   |   ├── __init__.py
 |   │   └── mt5Client.py
@@ -67,110 +68,150 @@ MovingAverage_Advisor/
 │   ├── Trade/
 │   |   ├── __init__.py
 │   |   ├── statsManager.py
-│   │   └── TradesAlgo.py      # Trade execution logic
+│   │   └── TradesAlgo.py               # Trade execution logic
 │   ├── database/
 │   |   ├── __init__.py
-│   |   └── MySQLdatabase.py   # Optional DB logging
+│   |   └── MySQLdatabase.py            # Optional DB logging
 |   ├── Telegram/
 │   |   └── __init__.py
-│   |       ├── core.py              # main TelegramMessenger (async)
-│   |       ├── runner.py            # bot startup with lock + watchdog
+│   |       ├── core.py                 # main TelegramMessenger (async)
+│   |       ├── runner.py               # bot startup with lock + watchdog
 │   |       ├── handlers/
 │   |       │   ├── __init__.py
 │   |       │   ├── start_handler.py
 │   |       │   ├── stop_handler.py
 │   |       │   ├── status_handler.py
 │   |       └── utils/
-│   |           ├── logger.py        # rotating logs
-│   |           ├── singleton.py     # PID lock + stale cleanup
-│   |           ├── env_loader.py    # unified .env resolver
-│   |           └── healthcheck.py   # simple health server
+│   |           ├── logger.py           # rotating logs
+│   |           ├── singleton.py        # PID lock + stale cleanup
+│   |           ├── env_loader.py       # unified .env resolver
+│   |           └── healthcheck.py      # simple health server
 |   ├── utils/
 |   │   ├── __init__.py
-│   │   ├── cache.py
-│   │   ├── ThreadHandler.py
+│   |   ├── cache.py
+│   |   ├── ThreadHandler.py
 │   |   └── dataHandler.py  
 |   │
 |   ├── MovingAverage/
 │   |   ├── __init__.py
-|   │   └── MovingAverage.py       # Strategy implementation
+|   │   └── MovingAverage.py            # Strategy implementation
 |   │
-│   └── MA_DynamAdvisor.py       # Main bot runner
+│   └── MA_DynamAdvisor.py              # Main bot runner
 ├── .env
 ├── makefile
-├── build.py                   # PyBuilder build script
-├── Dockerfile                 # Docker container config
-├── requirements.txt           # Python dependencies
-├── README.md                  # Project documentation
-└── .pybuilder/                # PyBuilder generated files
+├── build.py                            # PyBuilder build script
+├── Dockerfile                          # Docker container config
+├── requirements.txt                    # Python dependencies
+├── README.md                           # Project documentation
+└── .pybuilder/                         # PyBuilder generated files
 
+```
+
+## system process diagram
+
+```scss
+                                                                 Shared Cache (Authoritative)
+Main                                   ┌───────────────────────────────────────────────────────────────────────────────────────────────┐
+┌───────────────────────────┐          |                                                                                               |
+|                           |          |  Process1: mt5 pipeline                                                                       |
+| Process                   |          |  ┌─────────────────────────────────────────────────────┐                                      |
+| Supervisor                |       ┌────>|                                                     |                                      |
+|                           |       |  |  │-----------------------------------------------------│                                      |
+|                           |       |  |  | 1. Discover symbols                                 |                                      |
+|                           |       |  |  | 2. Backtest each symbol (Pooled )                   |                                      |
+|                           |       |  |  | 3. Score performance                                | all symbols                          |
+|---------------------------|       |  |  | 4. Rank symbols                                     |───────────┐                          |
+|                           |       |  |  | 5. Select top N symbols                             |           │                          |                                     
+| - bot state               |       |  |  └─────────────────────────────────────────────────────┘           |                          |
+| - settings                |───────┘  |                                                                    |                          |
+| - process lifecycle       | start 1  |                                      Process2: symbol backtest     ▼                          |
+|                           |          |                                      ┌─────────────────────────────────────────────────────┐  |
+|                           |          |                                      |                                                     |  |
+|                           | start 2  |                                      |-----------------------------------------------------│  |
+|                           |────────────────────────────────────────────────>|    ├── load last backtest timestamp                 |  |
+|                           |          |                                      |    │                                                |  |
+|                           |          |                                      |    └── every N minutes:                             |  |
+|                           |          |                                      |       ├── check if 3 months elapsed                 |  |
+|                           |          |                                      |       ├── backtest all symbols                      |  |
+|                           |          |                                      |       ├── rank symbols                              |  |
+|                           |          |                                      |       └── activate top performers                   |  |
+|                           |          |                                      |                                                     |  |       
+|                           |          |                                      └─────────────────────────────────────────────────────┘  | 
+|                           |─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+|                           | start 4  |                                              |                                                |                          |
+|                           |          |                                              |                                                |                          |
+|                           |          |                                              |   top N symbols                                |                          |
+|                           |          |                                              |                                                |                          |
+|                           |          |                                              |                                                |                          |
+|                           |          |      Process3: thread Handler                ▼                                                |                          |
+|                           |          |     ┌────────────────────────────────────────────────────────────┐                            |                          |         
+|                           |          |     |    Thread: EURUSD                                          |                            |                          |        
+|                           |          |     |    └── DataHandler(EURUSD)                                 |                            |                          |
+|                           |          |     |            ┌─────────────────────┐                         |                            |                          |
+|                           | start 3  |     |            | Symbol Thread       |────────────────────┐    |                            |                          |
+|                           |───────────────>|            │---------------------│ MovingAverage      │    |                            |                          |                               
+|                           |          |     |            │ EURUSD              | Crossover Strategy │    |                            |                          |
+|                           |          └─────|            │  └── DataHandler    |--------------------│    |────────────────────────────┘                          |
+|                           |                |            |    ├── M15          | - indicators       │    |                                                       |
+|                           |                |            |    ├── M30          | - alignment        │    |  signal1                                              |
+|                           |                |            |    ├── 1H           | - signals          │────|─────────────────────┐                                 |
+|                           |                |            |    └── 4H           |────────────────────┘    |                     |                                 |
+|                           |                |            └─────────────────────┘                         |                     |                                 ▼ 
+|                           |                |                                                            |                     |                Process4: trade execution 
+|                           |                |    Thread: GBPUSD                                          |                     |               ┌───────────────────────────────────┐
+|                           |                |    └── DataHandler(GBPUSD)                                 |                     └──────────────>|                                   |
+|                           |                |            ┌─────────────────────┐                         |                                     |                                   |
+|                           |                |            | Symbol Thread       |────────────────────┐    |                                     |-----------------------------------|
+|                           |                |            │---------------------│ MovingAverage      │    |                                     | - Risk Management                 |
+|                           |                |            │ GBPUSD              | Crossover Strategy │    |                                     |                                   |
+|                           |                |            │  └── DataHandler    |--------------------│    |                                     | - Live Trade Execution            |
+|                           |                |            |    ├── M15          | - indicators       │    |                                     |                                   |
+|                           |                |            |    ├── M30          | - alignment        │    |   signal 2                          | - Logging + Monitoring            |
+|                           |                |            |    ├── 1H           | - signals          │────|────────────────────────────────────>|                                   |
+|                           |                |            |    └── 4H           |────────────────────┘    |                                     |                                   |
+|                           |                |            └─────────────────────┘                         |                                     |                                   |
+|                           |                |                                                            |                                     |                                   |
+|                           |                |    Thread: GBPUSD                                          |                                     |                                   |
+|                           |                |    └── DataHandler(GBPUSD)                                 |                                     |                                   |
+|                           |                |            ┌─────────────────────┐                         |                                     |                                   |
+|                           |                |            | Symbol Thread       |────────────────────┐    |                 ┌──────────────────>|                                   |
+|                           |                |            │---------------------│ MovingAverage      │    |                 |                   |                                   |
+|                           |                |            │ GBPUSD              | Crossover Strategy │    |                 |                   |                                   |
+|                           |                |            │  └── DataHandler    |--------------------│    |                 |                   └───────────────────────────────────┘
+|                           |                |            |    ├── M15          | - indicators       │    |                 |       
+|                           |                |            |    ├── M30          | - alignment        │    |                 |       
+|                           |                |            |    ├── 1H           | - signals          │────|─────────────────┘       
+|                           |                |            |    └── 4H           |────────────────────┘    |   signal 3       
+|                           |                |            └─────────────────────┘                         |                  
+|                           |                |                                                            |                  
+|                           |                |                                                            |                  
+|                           |                |                                                            |                  
+|                           |                └────────────────────────────────────────────────────────────┘
+|                           |
+└───────────────────────────┘
 ```
 
 ## 🚀 Getting Started
 
 ### 🧰 Prerequisites
 
-- Python 3.10+
+---
+
+## Dev-requirements
+
+- Python **3.10+**
 - MetaTrader5 terminal installed and configured
-- Docker (optional for containerization)
-
-### 🔧 Installation (Local)
-
-```bash
-# Clone the repository
-git clone https://github.com/MuladiPhodzo/MovingAverage_Advisor.git
-cd MovingAverage_Advisor
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Build the project (optional)
-pyb clean install
-```
-
-## 🐳 Running with Docker
-
-### Make sure Docker is installed and running
-
-1. __Build the image:__
-
-```bash
-docker build -t movingaverage-advisor .
-```
-
-1. __Run the container:__
-
-```bash
-docker run -it --rm movingaverage-advisor
-```
+- Docker
 
 ---
 
-## ⚙️ Configuration
-
-Symbols and timeframes are managed inside the `Advisor` module. Example usage in `RunAdvisorBot.py`:
-
-```python
-bot.main("EURUSD", bot.advisor, bot.advisor.TF)
-```
-
-You can add multiple symbols and timeframes by editing the `TF` and `symbols` properties.
-
 ---
 
-## 🧪 Testing
+## client rewuirements
 
-Unit tests are located in:
-
-```bash
-src/unittest/python/
-```
-
-To run tests via PyBuilder:
-
-```bash
-pyb run_unit_tests
-```
+- MetaTrader5 terminal **installed**
+- good **connectivity**
+- Algo tradinig **enabled**
 
 ---
 
@@ -187,9 +228,9 @@ pyb run_unit_tests
 
 ## 🧠 Author
 
-__Phodzo Lionel Muladi__  
-Email: <muladi.lionel@gmail.com>  
-LinkedIn: <https://www.linkedin.com/in/phodzo-muladi-654214257>
+**Phodzo Lionel Muladi**  
+**Email**: <muladi.lionel@gmail.com>  
+**LinkedIn**: <https://www.linkedin.com/in/phodzo-muladi-654214257>
 
 ---
 

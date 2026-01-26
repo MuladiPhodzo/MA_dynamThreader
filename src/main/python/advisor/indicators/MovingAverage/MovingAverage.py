@@ -43,7 +43,7 @@ class MovingAverageCrossover:
                  cache_handler: CacheManager = None,
                  data_handler: utils.dataHandler = None,
                  fast_period=50,
-                 slow_period=150,
+                 slow_period=200,
                  pip_distance=250):
         """
         Initialize the strategy with data handlers and parameters.
@@ -119,7 +119,7 @@ class MovingAverageCrossover:
 
     def _build_mtf_row_data(self, ts, data: dict):
         """Build multi-timeframe snapshot for a given timestamp."""
-        def check_tf(tf, df: pd.DataFrame):
+        def check_tf(tf, df: pd.DataFrame) -> dict:
             row = df.loc[ts]
             if not all(col in row for col in ["Slow_MA", "Fast_MA", "Proximity"]):
                 return
@@ -338,11 +338,12 @@ class MovingAverageCrossover:
         """
 
         try:
-            if not self.all_timestamps:
+            common_ts = set.intersection(*self.all_timestamps)
+            if not common_ts:
                 logger.warning(f"{self.symbol}: No timestamps found for MTF alignment.")
                 return
 
-            for ts in self.all_timestamps:
+            for ts in common_ts:
                 mtf_row_data = self._build_mtf_row_data(ts, data)
 
                 if len(mtf_row_data) == 0:
@@ -527,7 +528,7 @@ class MovingAverageCrossover:
     # ------------------------------------------------------
     # 8) generate eummary per timeframe
     # ------------------------------------------------------
-    def generate_backtest_summary(self, tf, df: pd.DataFrame):
+    def generate_backtest_summary(self, tf, df: pd.DataFrame) -> dict:
         """
         Generate a clean summary report for all timeframes.
         Converts numpy types to built-in Python values.
@@ -538,7 +539,7 @@ class MovingAverageCrossover:
         if not hasattr(self, "results") or not self.results:
             return
 
-        summary = {}
+        summary: dict = {}
         all_pips = []
 
         if df.empty or tf not in ["15M", "30M"]:
@@ -663,7 +664,7 @@ class MovingAverageCrossover:
         logger.info("Backtest completed.")
         return self.results
 
-    def run_MA_Strategy(self, data: Dict[str, pd.DataFrame] = {}, backtest: bool = False) -> dict:
+    def run_MA_Strategy(self, data: Dict[str, pd.DataFrame] = {}, backtest: bool = False) -> dict[str, pd.DataFrame]:
         """
         Execute MA strategy on prepared data.
         Returns: a dictionary of performance metrics and backtested data
@@ -680,10 +681,9 @@ class MovingAverageCrossover:
             tf = futures[f]
             data[tf] = f.result()
 
+        # --- STEP 2: sequence synthesis ---
+        self.sequence_Trend_Data(data)
         if backtest:
-            # --- STEP 2: sequence synthesis ---
-            self.sequence_Trend_Data(data)
-
             # --- STEP 3: entry detection ---
             entry_futures = {
                 self.executor.submit(self.identify_proximity_entries, df, tf): tf
@@ -707,5 +707,4 @@ class MovingAverageCrossover:
                 "summaries": summaries,
                 "data": data
             }
-        self.identify_Trend_Alignment(data, backtest=False)
         return data

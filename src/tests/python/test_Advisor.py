@@ -2,7 +2,7 @@ import unittest
 import pandas as pd
 import MetaTrader5 as mt5
 
-from advisor.Client.mt5Client import MetaTrader5Client as Client
+from advisor.mt5_pipeline.Client.mt5Client import MetaTrader5Client as Client
 
 
 class TestAdvisor(unittest.TestCase):

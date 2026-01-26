@@ -4,7 +4,7 @@ import datetime as dt
 import logging
 import sys
 from advisor.Telegram.core import TelegramMessenger as Messenger
-from advisor.Client import mt5Client
+from advisor.mt5_pipeline.Client import mt5Client
 from advisor.Trade.tradeStats import TradeStats as Stats
 
 # -------------------------

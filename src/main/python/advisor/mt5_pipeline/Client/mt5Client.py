@@ -132,7 +132,7 @@ class MetaTrader5Client:
     def get_all_symbols(self) -> list:
         return mt5.symbols.get()
 
-    def get_live_data(self, symbol, timeframe , bars=1000):
+    def get_live_data(self, symbol, timeframe , bars=1000) -> pd.DataFrame:
         """
         Fetch live market data for a given symbol and timeframe.
         Parameters:
@@ -153,28 +153,27 @@ class MetaTrader5Client:
             return None
 
         data = pd.concat([pd.DataFrame(rates)])
+        # convert timestamps to datetime
         data["time"] = pd.to_datetime(data["time"], unit="s")
 
         return data
 
-    def get_rates_range(self, symbol, tf_name, tf_value):
-        multi_tf_data = {}
-
+    def get_rates_range(self, symbol, tf_name, tf_value) -> pd.DataFrame:
+        data = pd.DataFrame()
         end_date = datetime.datetime.now()
         start_date = end_date - relativedelta(months=6)
 
         rates = mt5.copy_rates_range(
             symbol, tf_value, start_date, end_date)
-        if rates is not None and len(rates) > 0:
-            df = pd.DataFrame(rates)
+        if rates is not None:
+            data = pd.DataFrame(rates)
             # convert timestamps to datetime
-            df['time'] = pd.to_datetime(df['time'], unit='s')
-            multi_tf_data[tf_name] = df
+            data['time'] = pd.to_datetime(data['time'], unit='s')
         else:
             logger.info(
-                f"Failed to retrieve {symbol} rates for {tf_name}, error: {mt5.last_error()}")
+                f"Error in {symbol} {tf_name}: {mt5.last_error()}")
 
-        return multi_tf_data
+        return data
 
     def _should_fetch_tf(self, symbol: str, tf_name: str) -> bool:
 
@@ -200,19 +199,19 @@ class MetaTrader5Client:
 
         return False
 
-    def get_multi_tf_data(self, symbol):
+    def get_multi_tf_data(self, symbol) -> dict[str, pd.DataFrame] | None:
         """
         Interval-aware parallel multi-timeframe fetcher.
         Fetches ONLY timeframes whose interval has elapsed.
 
         Returns:
-            dict[str, pd.DataFrame] or empty dict
+            dict[str, pd.DataFrame] or None
         """
 
         logger.info(f"⏳ Checking timeframes for {symbol}...")
 
         futures = {}
-        results = {}
+        results: dict[str, pd.DataFrame] = {}
 
         for tf_name, tf_meta in self.TF_dict.items():
             if not self._should_fetch_tf(symbol, tf_name):
@@ -230,14 +229,13 @@ class MetaTrader5Client:
 
         if not futures:
             logger.debug(f"⏭ No TF intervals elapsed for {symbol}")
-            return {}
+            return None
 
         for future in as_completed(futures):
             tf_name = futures[future]
             try:
                 df = future.result()
-                if df is not None and not df.empty:
-                    results[tf_name] = df
+                results[tf_name] = pd.DataFrame(df)
             except Exception as e:
                 logger.exception(f"❌ {symbol} {tf_name} fetch failed: {e}")
 

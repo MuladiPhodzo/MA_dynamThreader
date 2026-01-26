@@ -5,7 +5,7 @@ from pathlib import Path
 import logging
 import sys
 
-from advisor.utils.locks import CACHE_LOCK
+from advisor.utils.locks import CACHE_LOCK, THREAD_LOCK
 # -------------------------
 # Logging Configuration
 # -------------------------
@@ -26,7 +26,7 @@ class CacheManager:
 
         self.cache_file = Path(cache_file)
         self.ttl = ttl
-        self.lock = threading.Lock()
+        self.lock = THREAD_LOCK
         self.memory = {}
         self.timestamps = {}
         self.cache_lock = CACHE_LOCK
@@ -43,7 +43,7 @@ class CacheManager:
             self.timestamps[key] = time.time()
 
     # Retrieve and check TTL
-    def get(self, key):
+    def get(self, key) -> dict:
         with self.lock:
             if key not in self.memory:
                 return None
@@ -67,6 +67,14 @@ class CacheManager:
                         cache[key] = data
             return cache
 
+    def snapshot(self, ts):
+        """Return multi-TF snapshot at timestamp"""
+        snap = {}
+        for tf, df in self.memory.items():
+            if ts in df.index:
+                snap[tf] = df.loc[ts]
+        return snap
+
     # Save to disk
     def save_cache(self):
         with self.lock:
@@ -84,8 +92,8 @@ class CacheManager:
             logger.info(f"❌ Error loading cache: {e}")
             pass
 
-    # Saves every 10 seconds
+    # Saves every 5 minutes
     def _auto_save(self):
         while True:
-            time.sleep(10)
+            time.sleep(60)
             self.save_cache()
