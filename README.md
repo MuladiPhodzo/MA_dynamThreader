@@ -39,6 +39,7 @@ calculated signals.
     ├────────────────────────────────────────────┤
     │ 13. Monitoring & Observability Layer       │
     └────────────────────────────────────────────┘
+```
 
 ## 🧠 Key Features
 
