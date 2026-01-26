@@ -54,7 +54,7 @@ calculated signals.
 
 ## 📁 Project Structure
 
-```bash
+```scss
 
 MovingAverage_Advisor/
 ├── advisor/                            # Core logic
