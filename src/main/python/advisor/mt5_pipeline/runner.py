@@ -2,9 +2,8 @@ from datetime import datetime, timedelta
 import time
 import logging
 import sys
-import threading
 
-from advisor.utils.cache import CacheManager
+from advisor.utils.dataHandler import CacheManager
 from advisor.mt5_pipeline.Client.mt5Client import MetaTrader5Client
 import advisor.mt5_pipeline.core as core
 
@@ -20,54 +19,44 @@ logging.basicConfig(
     ],
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("MT5-Pipeline")
 class pipelineProcess:
     def __init__(
         self,
-        user_creds: dict,
-        cache_handler: CacheManager,
+        client: MetaTrader5Client,
+        cache_handler: CacheManager,  # shared cache state(Authorative)
+        shutdown_event,
         interval=5,
     ):
         self.init = False
         self.cache = cache_handler
-        self.client = MetaTrader5Client()
-        self.user_creds = user_creds
+        self.client = client
+        self.user_creds = self.client.creds
         self.poll_interval = interval
         self.pipeline = None
         self.last_run: datetime = None
+        self.done: bool = False
 
-        self.stop_event = threading.Event()
+        self.stop_event = shutdown_event
         self.stop_event.set()
 
-    def init_client(self):
-        try:
-            if not self.client.logIn(user_data=self.user_creds):
-                raise ConnectionRefusedError
-            else:
-                return True
-        except ConnectionError as e:
-            logger.exception(f"error connecting metatrader client: {e}")
+        self.init_client()
 
-    def init_pipeline(self):
-        try:
-            self.init = self.init_client()
-            if not self.init:
-                raise SystemError
-            else:
-                return core.mt5Pipeline(self.cache, self.client, self.stop_event)
-        except SystemError as e:
-            logger.exception(f"error initialising pipeline module: {e}")
-
-    def schedule_pipeline(self):
-        pl = self.init_pipeline()
+    def schedule_pipeline(self, heartbeats: dict):
+        name = ""
+        pl = core.MarketDataPipeline(self.client, self.cache)
         while not self.stop_event.is_set():
             try:
                 now = datetime.utcnow()
                 if self.last_run is None:
-                    pl.run_Injestion_Cycle()
+                    self.done = False
+                    pl.run_once(self.client.symbols)
                 elif now - self.last_run >= timedelta(minutes=self.poll_interval):
-                    pl.run_Injestion_Cycle()
+                    self.done = False
+                    pl.run_once(self.client.symbols)
+                heartbeats[name] = datetime.utcnow().isoformat()
                 self.last_run = now
+                self.done = True
                 time.sleep(60 * self.poll_interval)
             except ChildProcessError as e:
                 logger.critical(f"pipeline process fail: {e}", exc_info=True)

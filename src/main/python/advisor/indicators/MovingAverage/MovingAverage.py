@@ -8,10 +8,7 @@ import MetaTrader5 as mt5
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
-from pyparsing import Dict
-
 import advisor.utils.dataHandler as utils
-from advisor.utils.cache import CacheManager
 
 # -------------------------
 # Logging Configuration
@@ -40,8 +37,6 @@ class MovingAverageCrossover:
 
     def __init__(self,
                  symbol,
-                 cache_handler: CacheManager = None,
-                 data_handler: utils.dataHandler = None,
                  fast_period=50,
                  slow_period=200,
                  pip_distance=250):
@@ -53,7 +48,6 @@ class MovingAverageCrossover:
         :param slow_period: Period for the slow-moving average.
         """
         self.symbol = symbol
-        self.cache_handler = cache_handler
         self.fast_period = fast_period
         self.slow_period = slow_period
         self.pip_distance = pip_distance
@@ -62,7 +56,8 @@ class MovingAverageCrossover:
         self.signals = {}
         self.results = {}
         self.all_timestamps = set()
-        self.data_handler = data_handler
+        self.data_handler = utils.dataHandler(self.symbol, "EMA")
+        self.backtest: bool = False
 
         try:
             self.pip_size = self.get_pip_size(self.data_handler.get('30M'))
@@ -664,12 +659,34 @@ class MovingAverageCrossover:
         logger.info("Backtest completed.")
         return self.results
 
-    def run_MA_Strategy(self, data: Dict[str, pd.DataFrame] = {}, backtest: bool = False) -> dict[str, pd.DataFrame]:
+    def backtest_entries_data(self, data: dict):
+        # --- STEP 3: entry detection ---
+        entry_futures = {
+            self.executor.submit(self.identify_proximity_entries, df, tf): tf
+            for tf, df in data.items()
+            if "M" in tf
+        }
+
+        summaries = {}
+        for f in as_completed(entry_futures):
+            tf = entry_futures[f]
+            df = f.result()
+            data[tf] = df
+            if tf in ["15M", "30M"]:
+                summaries[tf] = self.generate_backtest_summary(tf, df)[tf]
+
+        return {
+            "summaries": summaries,
+            "data": data
+        }
+
+    def run(self) -> dict[str, pd.DataFrame] | None:
         """
         Execute MA strategy on prepared data.
         Returns: a dictionary of performance metrics and backtested data
         """
-
+        
+        data = self.data_handler.data
         # --- STEP 1: MA calculation (parallel, no early return) ---
         futures = {
             self.executor.submit(self.calculate_moving_averages_data, tf, df): tf
@@ -683,28 +700,7 @@ class MovingAverageCrossover:
 
         # --- STEP 2: sequence synthesis ---
         self.sequence_Trend_Data(data)
-        if backtest:
-            # --- STEP 3: entry detection ---
-            entry_futures = {
-                self.executor.submit(self.identify_proximity_entries, df, tf): tf
-                for tf, df in data.items()
-                if "M" in tf
-            }
-
-            summaries = {}
-            for f in as_completed(entry_futures):
-                tf = entry_futures[f]
-                df = f.result()
-                data[tf] = df
-                if tf in ["15M", "30M"]:
-                    summaries[tf] = self.generate_backtest_summary(tf, df)[tf]
-
-            # --- STEP 4: aggregate performance ---
-            win_rates = [s["win_rate"] for s in summaries.values() if not s.empty]
-
-            return {
-                "win_rate": round(sum(win_rates) / len(win_rates), 2) if win_rates else 0.0,
-                "summaries": summaries,
-                "data": data
-            }
+        if self.backtest:
+            data = self.backtest_entries_data(data)
+            return data
         return data

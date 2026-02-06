@@ -3,11 +3,14 @@ import sys
 import csv
 import json
 import logging
+import threading
+import time
+from pathlib import Path
+
+from advisor.utils.locks import CACHE_LOCK, THREAD_LOCK
 import pandas as pd
 import datetime
 from typing import Dict, Optional
-
-from advisor.utils.cache import CacheManager as cacheHandler
 
 # -------------------------
 # Logging Configuration
@@ -23,18 +26,78 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+
+class CacheManager:
+    def __init__(self, ttl=60):
+        self.ttl = ttl
+        self.lock = THREAD_LOCK
+        self.memory = {}
+        self.timestamps = {}
+        self.cache_lock = CACHE_LOCK
+
+        # background serializer
+        self.auto_save_thread = threading.Thread(target=self._auto_save, daemon=True)
+        self.auto_save_thread.start()
+
+    # Store any value
+    def set(self, key, value):
+        with self.lock:
+            self.memory[key] = value
+            self.timestamps[key] = time.time()
+
+    def set_atomic(self, key, value):
+        with self.cache_lock:
+            tmp_key = f"{key}.__tmp__"
+            self.set(tmp_key, value)
+            self.rename(tmp_key, key)
+
+    # Retrieve and check TTL
+    def get(self, key) -> dict:
+        with self.lock:
+            if key not in self.memory:
+                return None
+
+            if time.time() - self.timestamps.get(key, 0) > self.ttl:
+                # expired
+                del self.memory[key]
+                return None
+
+            return self.memory[key]
+
+    def get_by_group(self, group_val: str):
+        with self.lock:
+            cache = {}
+            for key, data in self.memory.items():
+                if group_val in key:
+                    if time.time() - self.timestamps.get(key, 0) > self.ttl:
+                        # expired
+                        del self.memory[key]
+                    else:
+                        cache[key] = data
+            return cache
+
+    def snapshot(self, ts):
+        """Return multi-TF snapshot at timestamp"""
+        snap = {}
+        for tf, df in self.memory.items():
+            if ts in df.index:
+                snap[tf] = df.loc[ts]
+        return snap
+
 class dataHandler:
-    def __init__(self, symbol, max_bars=3000):
+    def __init__(self, symbol, strategy: str, max_bars=3000):
         self.symbol = symbol
-
-        self.cache_handler = cacheHandler()
-
-        self.data : Dict[str, pd.DataFrame] = self.get_cache(self.symbol)
+        self.dir_name = os.path.dirname(f"{self.symbol}_{strategy}")
+        
+        self.cache_handler = CacheManager()
+        self.data : Dict[str, pd.DataFrame] = self.cache_handler.get(symbol)
         self.all_timestamps = set(
             self.all_timestamps.update(df)
             for tf, df in self.data.items())
+        
         self.trades = pd.DataFrame()
         self.max_bars = max_bars
+        self.FILE_LOCK = 
 
     def get_cache(self, key):
         return self.cache_handler.get(key)
@@ -44,33 +107,32 @@ class dataHandler:
         Append new rows into timeframe data instead of replacing.
         Deduplicates by index, sanitizes, trims, and updates timestamps.
         """
-        with self.thread_lock:
-            if df is None or df.empty:
-                return
+        if df is None or df.empty:
+            return
 
-            df = self._sanitize(df)
+        df = self._sanitize(df)
 
-            # If timeframe does not exist yet → set directly
-            if tf not in self.data or self.data[tf] is None:
-                self.data[tf] = self._trim(df)
-                self.update_timestamps(df)
-                return
+        # If timeframe does not exist yet → set directly
+        if tf not in self.data or self.data[tf] is None:
+            self.data[tf] = self._trim(df)
+            self.update_timestamps(df)
+            return
 
-            existing = self.data[tf]
+        existing = self.data[tf]
 
-            # Append only NEW rows (index-based)
-            new_rows = df.loc[~df.index.isin(existing.index)]
+        # Append only NEW rows (index-based)
+        new_rows = df.loc[~df.index.isin(existing.index)]
 
-            if new_rows.empty:
-                return
+        if new_rows.empty:
+            return
 
-            # Concatenate + sanitize again (cheap & safe)
-            combined = pd.concat([existing, new_rows])
-            combined = self._sanitize(combined)
-            combined = self._trim(combined)
+        # Concatenate + sanitize again (cheap & safe)
+        combined = pd.concat([existing, new_rows])
+        combined = self._sanitize(combined)
+        combined = self._trim(combined)
 
-            self.data[tf] = combined
-            self.update_timestamps(new_rows)
+        self.data[tf] = combined
+        self.update_timestamps(new_rows)
 
     def add_trade(self, data: pd.DataFrame):
         self.trades.add(pd.DataFrame(data))
@@ -114,7 +176,6 @@ class dataHandler:
         )
 
     # ---------------- internal ---------------- #
-
     def _trim(self, df: pd.DataFrame):
         if len(df) > self.max_bars:
             return df.iloc[-self.max_bars:].copy()
@@ -124,6 +185,23 @@ class dataHandler:
         df = df[~df.index.duplicated(keep="last")]
         df.sort_index(inplace=True)
         return df
+
+        # Save to disk
+    def save_cache(self):
+        with self.lock:
+            data = {"memory": self.memory, "timestamps": self.timestamps}
+            self.cache_file.write_text(json.dumps(data, indent=4))
+
+    def load_cache(self):
+        if not self.file.exists():
+            return
+        try:
+            data = json.loads(self.cache_file.read_text())
+            self.memory = data.get("memory", {})
+            self.timestamps = data.get("timestamps", {})
+        except Exception as e:
+            logger.info(f"❌ Error loading cache: {e}")
+            pass
 
     def save_trade(self, trade_data, file_type="json"):
         """
@@ -181,7 +259,7 @@ class dataHandler:
             else:
                 raise ValueError("Unsupported file type. Use 'json' or 'csv'.")
 
-    def toCSVFile(self, data, file_path):
+    def save_data_toCSVFile(self, data, file_path):
         import tabulate
         """
         Save data to a CSV + formatted TXT table.
@@ -198,8 +276,7 @@ class dataHandler:
         df = pd.DataFrame(data)
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         # Auto-create folder if it doesn't exist
-        folder = os.path.dirname(file_path)
-        os.makedirs(folder, exist_ok=True)
+        os.makedirs(self.dir_name, exist_ok=True)
 
         with self.file_lock:
             with self.thread_lock:
@@ -229,3 +306,9 @@ class dataHandler:
 
         logger.info(f"📄 Pretty table saved to {table_path}")
         logger.info("✅ Data saved successfully to both CSV + Pretty Table.")
+
+    # Saves every 5 minutes
+    def _auto_save(self):
+        while True:
+            time.sleep(60 * 15)
+            self.save_data_toCSVFile()

@@ -8,7 +8,8 @@ import threading
 
 from advisor.mt5_pipeline.Client.mt5Client import MetaTrader5Client
 from advisor.indicators.MovingAverage import MovingAverage as MA
-from advisor.utils.cache import CacheManager
+from advisor.utils.dataHandler import CacheManager
+from . import metrics
 
 # -------------------------
 # Logging Configuration
@@ -65,18 +66,20 @@ class backtestProcess:
                 indicator = MA.MovingAverageCrossover(symbol, data)
                 data = indicator.run_MA_Strategy(data, backtest=True)
                 results[symbol] = data
+                
             except Exception as e:
                 logger.warning(f"Backtest failed for {symbol}: {e}")
         return results
 
-    def select_best_symbols(self, results: dict, min_win_rate: float = 78.0) -> list:
+    def select_best_symbols(self, results: dict, min_score=0.78) -> list:
         """
         Select best-performing symbols based on backtest metrics.
         """
+        symbols = metrics.metrics.rank_symbols(results.get("summaries"), results.get("data"))
         return [
             symbol
-            for symbol, stats in results["summary"].items()
-            if stats.get("win_rate", 0) >= min_win_rate
+            for symbol in symbols
+            if symbol.get("summaries")("score") >= min_score
         ]
 
     def run_backtest_cycle(self):
@@ -91,7 +94,7 @@ class backtestProcess:
             logger.info(f"Starting scheduled backtest cycle. date now: {now}, next cycle: {self.next_cycle}")
             self.client.backtest = True
             results = self.backtest_all_symbols(self.client.symbols)
-            best_symbols = self.select_best_symbols(results)
+            best_symbols = self.select_best_symbols(results=results)
             # Activate only best symbols
             self.client.symbols.clear()
             self.client.symbols = best_symbols

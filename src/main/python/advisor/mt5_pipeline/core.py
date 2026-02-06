@@ -1,8 +1,8 @@
 import logging
 import sys
-
+from typing import Dict
 from advisor.mt5_pipeline.Client.mt5Client import MetaTrader5Client
-from advisor.utils.cache import CacheManager
+from advisor.utils.dataHandler import CacheManager
 
 # -------------------------
 # Logging Configuration
@@ -17,47 +17,39 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
-class mt5Pipeline:
-    def __init__(
-        self,
-        cache_handler: CacheManager,
-        client: MetaTrader5Client,
-        poll_interval: int = 60 * 5,
-        bars: int = 100
-    ):
-        super().__init__(daemon=True)
-        self.cache_handler = cache_handler
-        self.poll_interval = poll_interval
-        self.bars = bars
 
-        self.mt5_client = client
-        self.symbols = client.symbols
+class MarketDataPipeline:
+    """
+    Stateless market data ingestion logic.
+    No scheduling, no sleeping, no threading.
+    """
 
-    def stop(self):
-        self._stop_event.set()
+    def __init__(self, client: MetaTrader5Client, cache_handler: CacheManager):
+        self.client = client
+        self.cache = cache_handler
 
-    def fetch_symbol_data(self, symbol: str):
+    def fetch_symbol(self, symbol: str) -> Dict | None:
         try:
-            data = self.mt5_client.get_multi_tf_data(symbol)
+            data = self.client.get_multi_tf_data(symbol)
             if data is None:
-                print(f"No data for {symbol}")
+                logger.warning(f"No data returned for {symbol}")
                 return None
             return data
-        except Exception as e:
-            print(f"Error fetching data for symbol {symbol}: {e}")
+        except Exception:
+            logger.exception(f"Failed fetching data for {symbol}")
             return None
 
-    def run_Injestion_Cycle(self):
-        """
-        runs the pipeline on a scheduled basis
-        """
-        # main pipeline logic
-        # e.g., fetching data, processing, caching, etc.
-        try:
-            # fetch data for all symbols
-            for s in self.symbols:
-                data = self.fetch_symbol_data(s)
-                if data is not None:
-                    self.cache_handler.set(s, data)
-        except Exception as e:
-            print(f"Error in injestion cycle: {e}")
+    def ingest_symbol(self, symbol: str) -> dict | None:
+        data = self.fetch_symbol(symbol)
+        if data is None:
+            return None
+        return data
+
+    def run_once(self, symbols: list[str]) -> None:
+        for symbol in symbols:
+            data = self.ingest_symbol(symbol)
+            if data is None:
+                continue
+            # atomic per-symbol write
+            self.cache.set_atomic(symbol, data)
+

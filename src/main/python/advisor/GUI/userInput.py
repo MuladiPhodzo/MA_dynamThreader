@@ -282,10 +282,11 @@ class UserGUI:
 
     def __init__(self):
         self.root = tb.Window(themename="cosmo")
-        self.root.title("🚀 Trading Bot Setup")
+        self.root.title("🚀 EMA8t setup Wizard")
         self.root.geometry("700x650")
 
         self.user_data = {}
+        self.bot_cfg = {}
         self.log_window = None
         self._build_main_ui()
         if CONFIG_FILE and os.path.exists(CONFIG_FILE):
@@ -327,29 +328,6 @@ class UserGUI:
                               width=10)
         self.rr.current(2)
         self._add_field(trading_frame, "RR Ratio", self.rr)
-
-        timeframes = tb.Labelframe(
-            trading_frame,
-            text="Timeframes",
-            width=10,
-            padding=(10, 5))
-
-        timeframes.pack(fill="x", pady=5)
-        self.tf_primary = tb.Combobox(
-            timeframes,
-            values=["1M", "5M", "15M", "30M", "1H", "4H", "1D"],
-            width=10)
-
-        self.tf_primary.current(3)
-        self.tf_primary.pack(side="left", padx=(0, 5))
-
-        self.tf_secondary = tb.Combobox(
-            timeframes,
-            values=["1M", "5M", "15M", "30M", "1H", "4H", "1D"],
-            width=10)
-        self.tf_secondary.current(4)
-        self.tf_secondary.pack(side="left",
-                               padx=(0, 5))
 
         account_frame = tb.Labelframe(
             main_frame, text="👤 Account Info", padding=10)
@@ -407,8 +385,6 @@ class UserGUI:
                 "sl": sl,
                 "rr_ratio": rr,
                 "tp": self.handleRR(),
-                "tf_primary": self.tf_primary.get(),
-                "tf_secondary": self.tf_secondary.get(),
                 "server": server,
                 "account_id": account_id,
                 "password": password,
@@ -426,8 +402,6 @@ class UserGUI:
                 "sl": self.sl.get(),
                 "rr_ratio": self.rr.get(),
                 "tp": self.handleRR(),
-                "tf_primary": self.tf_primary.get(),
-                "tf_secondary": self.tf_secondary.get(),
                 "server": self.server.get(),
                 "account_id": int(self.account_id.get()),
                 "password": self.password.get(),
@@ -452,14 +426,12 @@ class UserGUI:
 
             # Ensure saved values are clean
             cleaned_data = {
-                "volume": str(configs.get("volume", "")),
-                "sl_distance": int(configs.get("sl", 150)),
-                "rr_ratio": str(configs.get("rr_ratio", "")),
-                "tf_primary": str(configs.get("tf_primary", "")),
-                "tf_secondary": str(configs.get("tf_secondary", "")),
-                "server": str(creds.get("server", "")),
-                "account_id": str(creds.get("account_id", "")),  # convert int → string for GUI
-                "password": str(creds.get("password", "")),
+                "volume": str(configs.get("trade_configs")("volume", "0.01")),
+                "sl_distance": int(configs.get("trade_configs")("pip_distance", 200)),
+                "rr_ratio": str(configs.get("trade_configs")("rr_ratio", "1:2")),
+                "server": str(creds.get("creds")("server", "")),
+                "account_id": str(creds.get("creds")("account_id", "")),  # convert int → string for GUI
+                "password": str(creds.get("creds")("password", "")),
             }
 
             # Auto-detect widget type (StringVar or Entry)
@@ -473,8 +445,6 @@ class UserGUI:
             set_val(self.volume, cleaned_data["volume"])
             set_val(self.sl, cleaned_data["sl_distance"])
             set_val(self.rr, cleaned_data["rr_ratio"])
-            set_val(self.tf_primary, cleaned_data["tf_primary"])
-            set_val(self.tf_secondary, cleaned_data["tf_secondary"])
             set_val(self.server, cleaned_data["server"])
             set_val(self.account_id, cleaned_data["account_id"])
             set_val(self.password, cleaned_data["password"])
@@ -507,13 +477,10 @@ class UserGUI:
                     "server": clean_value(self.server.get()),
                     "account_id": clean_value(int(self.account_id.get())),
                     "password": clean_value(self.password.get())},
-                "configs": {
+                "trade_configs": {
                     "volume": clean_value(self.volume.get()),
-                    "sl": clean_value(int(self.sl.get())),
-                    "rr_ratio": clean_value(self.rr.get()),
-                    "tp": self.handleRR(),
-                    "tf_primary": clean_value(self.tf_primary.get()),
-                    "tf_secondary": clean_value(self.tf_secondary.get())}
+                    "pip_distance": clean_value(int(self.sl.get())),
+                    "rr_ratio": clean_value(self.rr.get())}
             }
 
             tmp_file = tempfile.NamedTemporaryFile("w", delete=False, dir=os.path.dirname(CONFIG_FILE))

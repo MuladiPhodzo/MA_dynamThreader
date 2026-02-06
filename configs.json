@@ -1,0 +1,26 @@
+{
+    "creds": {
+        "server": "XMGlobal-MT5 7",
+        "account_id": 314826552,
+        "password": "N3gus5_8888"
+    },
+    "trade_configs": {
+        "volume": "0.01",
+        "pip_distance": 250,
+        "rr_ratio": "1:3"
+    },
+    "account_data": {
+        "amount": 0,
+        "init_deposit": 0,
+        "trailing_sl": "True",
+        "max_open_trades": 10,
+        "diff": 0
+    },
+    "symbols": {
+        "USDJPY": {
+            "state":{},
+            "summary": {}
+        }
+    }
+
+}

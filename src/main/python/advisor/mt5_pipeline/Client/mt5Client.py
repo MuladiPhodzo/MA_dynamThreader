@@ -32,13 +32,14 @@ logger = logging.getLogger(__name__)
 class MetaTrader5Client:
     def __init__(self):
         self.symbols = []
+        self.creds = None
         self.account_info = None
         self.terminal_info = None
         self.THRESHOLD = 0.0100
         self.backtest = True
 
         self._tf_last_fetch = {}      # {(symbol, tf): datetime}
-        self._tf_lock = threading.Lock()
+        self._symbol_lock = threading.Lock()
 
         self.TF_dict = {
             '15M': {"tf_val": mt5.TIMEFRAME_M15, "interval_minutes": 15},
@@ -83,7 +84,7 @@ class MetaTrader5Client:
                 f"✅ Successfully connected to MT5 account {user_data['account_id']} on server '{user_data['server']}'")
             self.account_info = mt5.account_info()
             self.terminal_info = mt5.terminal_info()
-
+            self.creds = user_data
             logger.info('fetching all available symbols...')
             self.symbols = self.get_all_symbols()
             return True
@@ -207,42 +208,42 @@ class MetaTrader5Client:
         Returns:
             dict[str, pd.DataFrame] or None
         """
+        with self._symbol_lock:
+            logger.info(f"⏳ Checking timeframes for {symbol}...")
 
-        logger.info(f"⏳ Checking timeframes for {symbol}...")
+            futures = {}
+            results: dict[str, pd.DataFrame] = {}
 
-        futures = {}
-        results: dict[str, pd.DataFrame] = {}
+            for tf_name, tf_meta in self.TF_dict.items():
+                if not self._should_fetch_tf(symbol, tf_name):
+                    continue
 
-        for tf_name, tf_meta in self.TF_dict.items():
-            if not self._should_fetch_tf(symbol, tf_name):
-                continue
+                futures[self.data_executor.submit(
+                    self.get_live_data,
+                    symbol,
+                    tf_meta["tf_val"],
+                    self._determine_bar_count(tf_name)
+                )] = tf_name
 
-            futures[self.data_executor.submit(
-                self.get_live_data,
-                symbol,
-                tf_meta["tf_val"],
-                self._determine_bar_count(tf_name)
-            )] = tf_name
+                # Gentle MT5 pacing
+                time.sleep(0.15)
 
-            # Gentle MT5 pacing
-            time.sleep(0.15)
+            if not futures:
+                logger.debug(f"⏭ No TF intervals elapsed for {symbol}")
+                return None
 
-        if not futures:
-            logger.debug(f"⏭ No TF intervals elapsed for {symbol}")
-            return None
+            for future in as_completed(futures):
+                tf_name = futures[future]
+                try:
+                    df = future.result()
+                    results[tf_name] = pd.DataFrame(df)
+                except Exception as e:
+                    logger.exception(f"❌ {symbol} {tf_name} fetch failed: {e}")
 
-        for future in as_completed(futures):
-            tf_name = futures[future]
-            try:
-                df = future.result()
-                results[tf_name] = pd.DataFrame(df)
-            except Exception as e:
-                logger.exception(f"❌ {symbol} {tf_name} fetch failed: {e}")
+            if results:
+                logger.info(f"✅ Updated TFs for {symbol}: {list(results.keys())}")
 
-        if results:
-            logger.info(f"✅ Updated TFs for {symbol}: {list(results.keys())}")
-
-        return results
+            return results
 
     def close(self):
         """ Close the MT5 connection.
