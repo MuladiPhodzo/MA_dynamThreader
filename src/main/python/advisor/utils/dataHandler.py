@@ -1,16 +1,16 @@
 import os
+from pathlib import Path
 import sys
 import csv
 import json
 import logging
 import threading
 import time
-from pathlib import Path
 
-from advisor.utils.locks import CACHE_LOCK, THREAD_LOCK
+from advisor.utils.locks import THREAD_LOCK, FILE_LOCK, PROCESS_LOCK
 import pandas as pd
 import datetime
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 # -------------------------
 # Logging Configuration
@@ -28,12 +28,12 @@ logger = logging.getLogger(__name__)
 
 
 class CacheManager:
-    def __init__(self, ttl=60):
+    def __init__(self, ttl=180):
         self.ttl = ttl
+        self.process_lock = PROCESS_LOCK
         self.lock = THREAD_LOCK
         self.memory = {}
         self.timestamps = {}
-        self.cache_lock = CACHE_LOCK
 
         # background serializer
         self.auto_save_thread = threading.Thread(target=self._auto_save, daemon=True)
@@ -41,66 +41,72 @@ class CacheManager:
 
     # Store any value
     def set(self, key, value):
-        with self.lock:
-            self.memory[key] = value
-            self.timestamps[key] = time.time()
+        with self.process_lock:
+            with self.lock:
+                self.memory[key] = value
+                self.timestamps[key] = time.time()
 
     def set_atomic(self, key, value):
-        with self.cache_lock:
-            tmp_key = f"{key}.__tmp__"
-            self.set(tmp_key, value)
-            self.rename(tmp_key, key)
+        with self.process_lock:
+            with self.lock:
+                tmp_key = f"{key}.__tmp__"
+                self.set(tmp_key, value)
+                self.rename(tmp_key, key)
 
     # Retrieve and check TTL
     def get(self, key) -> dict:
-        with self.lock:
-            if key not in self.memory:
-                return None
+        with self.process_lock:
+            with self.lock:
+                if key not in self.memory:
+                    return None
 
-            if time.time() - self.timestamps.get(key, 0) > self.ttl:
-                # expired
-                del self.memory[key]
-                return None
+                if time.time() - self.timestamps.get(key, 0) > self.ttl:
+                    # expired
+                    del self.memory[key]
+                    return None
 
-            return self.memory[key]
+                return self.memory[key]
 
     def get_by_group(self, group_val: str):
-        with self.lock:
-            cache = {}
-            for key, data in self.memory.items():
-                if group_val in key:
-                    if time.time() - self.timestamps.get(key, 0) > self.ttl:
-                        # expired
-                        del self.memory[key]
-                    else:
-                        cache[key] = data
-            return cache
+        with self.process_lock:
+            with self.lock:
+                cache = {}
+                for key, data in self.memory.items():
+                    if group_val in key:
+                        if time.time() - self.timestamps.get(key, 0) > self.ttl:
+                            # expired
+                            del self.memory[key]
+                        else:
+                            cache[key] = data
+                return cache
 
     def snapshot(self, ts):
         """Return multi-TF snapshot at timestamp"""
-        snap = {}
-        for tf, df in self.memory.items():
-            if ts in df.index:
-                snap[tf] = df.loc[ts]
-        return snap
+        with self.process_lock:
+            with self.lock:
+                snap = {}
+                for tf, df in self.memory.items():
+                    if ts in df.index:
+                        snap[tf] = df.loc[ts]
+                return snap
 
 class dataHandler:
-    def __init__(self, symbol, strategy: str, max_bars=3000):
+    def __init__(self, symbol, strategy: str, cache: CacheManager, max_bars=3000):
         self.symbol = symbol
         self.dir_name = os.path.dirname(f"{self.symbol}_{strategy}")
-        
-        self.cache_handler = CacheManager()
+        self.cache_handler = cache
+
         self.data : Dict[str, pd.DataFrame] = self.cache_handler.get(symbol)
         self.all_timestamps = set(
             self.all_timestamps.update(df)
             for tf, df in self.data.items())
-        
+
         self.trades = pd.DataFrame()
         self.max_bars = max_bars
-        self.FILE_LOCK = 
 
-    def get_cache(self, key):
-        return self.cache_handler.get(key)
+        self.process_lock = PROCESS_LOCK
+        self.thread_lock = THREAD_LOCK
+        self.file_lock = FILE_LOCK
 
     def update(self, tf: str, df: pd.DataFrame):
         """
@@ -140,6 +146,50 @@ class dataHandler:
     def set_data(self, data: dict):
         for tf, df in data.items():
             self.update(tf, df)
+
+    def set_atomic(self, symbol: str, data: Any) -> None:
+        """
+        Atomically write symbol data.
+        """
+        with self._process_lock:
+            with self._thread_lock:
+                try:
+                    data_path = self._data_path(symbol)
+                    meta_path = self._meta_path(symbol)
+
+                    tmp_data = data_path.with_suffix(".tmp")
+                    tmp_meta = meta_path.with_suffix(".tmp")
+
+                    payload = {
+                        "symbol": symbol,
+                        "timestamp": time.time(),
+                        "data": data
+                    }
+
+                    meta = {
+                        "symbol": symbol,
+                        "updated_at": time.time(),
+                        "size": len(json.dumps(payload))
+                    }
+
+                    # write tmp files
+                    with open(tmp_data, "w", encoding="utf-8") as f:
+                        json.dump(payload, f)
+                        f.flush()
+                        os.fsync(f.fileno())
+
+                    with open(tmp_meta, "w", encoding="utf-8") as f:
+                        json.dump(meta, f)
+                        f.flush()
+                        os.fsync(f.fileno())
+
+                    # atomic replace
+                    os.replace(tmp_data, data_path)
+                    os.replace(tmp_meta, meta_path)
+
+                except Exception:
+                    logger.exception(f"Cache write failed for {symbol}")
+                    raise
 
     def get(self, tf: str) -> Optional[pd.DataFrame]:
         return self.data.get(tf)
@@ -186,24 +236,7 @@ class dataHandler:
         df.sort_index(inplace=True)
         return df
 
-        # Save to disk
-    def save_cache(self):
-        with self.lock:
-            data = {"memory": self.memory, "timestamps": self.timestamps}
-            self.cache_file.write_text(json.dumps(data, indent=4))
-
-    def load_cache(self):
-        if not self.file.exists():
-            return
-        try:
-            data = json.loads(self.cache_file.read_text())
-            self.memory = data.get("memory", {})
-            self.timestamps = data.get("timestamps", {})
-        except Exception as e:
-            logger.info(f"❌ Error loading cache: {e}")
-            pass
-
-    def save_trade(self, trade_data, file_type="json"):
+    def save_trades(self, trade_data, file_type="json"):
         """
         Saves trade information to a file (JSON or CSV).
 
@@ -259,7 +292,7 @@ class dataHandler:
             else:
                 raise ValueError("Unsupported file type. Use 'json' or 'csv'.")
 
-    def save_data_toCSVFile(self, data, file_path):
+    def save_data_toCSVFile(self, data, file_path: Path):
         import tabulate
         """
         Save data to a CSV + formatted TXT table.
@@ -303,9 +336,24 @@ class dataHandler:
                 with open(table_path, "a", encoding="utf-8") as f:
                     f.write(f"Timestamp: {timestamp}\n")
                     f.write(pretty_text + "\n\n")
+                    logger.info(f"📄 Pretty table saved to {table_path}")
+        logger.info("✅ Data saved successfully.")
 
-        logger.info(f"📄 Pretty table saved to {table_path}")
-        logger.info("✅ Data saved successfully to both CSV + Pretty Table.")
+    def exists(self, symbol: str) -> bool:
+        return self._data_path(symbol).exists()
+
+    def delete(self, symbol: str) -> None:
+        with self.process_lock:
+            with self.thread_lock:
+                try:
+                    sym_dir = self._symbol_dir(symbol)
+                    for file in sym_dir.glob("*"):
+                        file.unlink()
+                    sym_dir.rmdir()
+                except FileNotFoundError:
+                    pass
+                except Exception:
+                    logger.exception(f"Failed deleting cache for {symbol}")
 
     # Saves every 5 minutes
     def _auto_save(self):

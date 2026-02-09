@@ -1,5 +1,5 @@
 # core/state.py
-from multiprocessing import Manager
+from multiprocessing.managers import SyncManager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Dict
@@ -22,23 +22,16 @@ class SymbolState:
 @dataclass
 class BotState:
     version: str = "1.0"
-    trade_cfg : dict = {
-        "lot": 0.01,
-        "pip_distance": 200,
-        "ratio": "1:2",
-        "max_open_trades": 25
-    }
-
     last_backtest_run: datetime | None = None
     next_backtest_run: datetime | None = None
     symbols: Dict[str, SymbolState] = field(default_factory=dict)
 
     backtest_running: bool = False
-    live_trading_enabled: bool = False
+    live_trading_enabled: bool = True
 
     state = Enum("state", ["STARTING", "RUNNING", "RUNNING_BACKTEST", "IDLE", "DEGRADED", "RECOVERING", "STOPPING", "STOPPED"])
 class StateManager:
-    def __init__(self, manager):
+    def __init__(self, manager: SyncManager):
         self._state = manager.Value("state", BotState.state.STARTING.value)
 
     @staticmethod
@@ -72,10 +65,10 @@ class StateManager:
                 },
                 backtest_running=raw["backtest_running"],
                 live_trading_enabled=raw["live_trading_enabled"],
-                
             )
 
     def set_state(self, state: BotState.state):
+        BotState.backtest_running = True if not BotState.backtest_running else False
         self._state.value = state.value
 
     def get_state(self) -> BotState:
@@ -120,22 +113,6 @@ class StateManager:
                 json.dump(payload, f, indent=2)
 
             tmp.replace(STATE_FILE)
-
-    @staticmethod
-    def saveSymbolstate(state: SymbolState):
-        with STATE_LOCK:
-            for val in state:
-                pass
-
-    @staticmethod
-    def update(state: BotState, updates: dict):
-        with STATE_LOCK:
-            st = getattr(state, state.__qualname__())
-            return st
-
-    @staticmethod
-    def get_state(state: str):
-        return BotState() if isinstance(state, BotState) else SymbolState()
 
     # core/scheduler.py
     def is_backtest_due(state: BotState) -> bool:

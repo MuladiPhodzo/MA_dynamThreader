@@ -1,10 +1,10 @@
-from multiprocessing import Manager
+from multiprocessing.managers import SyncManager
 from datetime import datetime
 
 
 class HealthBus:
 
-    def __init__(self, manager: 'Manager'):
+    def __init__(self, manager: SyncManager):
         self.data = manager.dict()
 
     def update(self, proc_name, status, meta=None):

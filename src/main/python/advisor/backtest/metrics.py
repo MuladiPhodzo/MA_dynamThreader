@@ -44,7 +44,7 @@ class metrics:
 
     def rank_symbols(self, backtest_results: dict) -> list:
         """
-        backtest_results = {
+        backtest_summary = {
             "EURUSD": {stats},
             "GBPUSD": {stats},
             ...

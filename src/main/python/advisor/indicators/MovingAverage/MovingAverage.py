@@ -8,7 +8,7 @@ import MetaTrader5 as mt5
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
-import advisor.utils.dataHandler as utils
+from advisor.utils.dataHandler import dataHandler
 
 # -------------------------
 # Logging Configuration
@@ -37,6 +37,7 @@ class MovingAverageCrossover:
 
     def __init__(self,
                  symbol,
+                 datahandler: dataHandler,
                  fast_period=50,
                  slow_period=200,
                  pip_distance=250):
@@ -56,7 +57,7 @@ class MovingAverageCrossover:
         self.signals = {}
         self.results = {}
         self.all_timestamps = set()
-        self.data_handler = utils.dataHandler(self.symbol, "EMA")
+        self.data_handler = datahandler
         self.backtest: bool = False
 
         try:

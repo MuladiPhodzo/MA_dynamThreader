@@ -10,7 +10,7 @@ class ConfigLoader:
         self.config_dir = config_dir
 
     def yaml_load(self, name: str) -> Optional[Dict]:
-        path = self.config_dir / f"{name}.yaml"
+        path = self.config_dir.replace(".json", ".yaml")
         if not path.exists():
             return None
 
@@ -20,24 +20,24 @@ class ConfigLoader:
         except Exception:
             return None
 
-        path = self.config_dir / f"{name}.json"
-        if not path.exists():
+    def json_load(self, name: str) -> Optional[Dict]:
+        if not self.config_dir.exists():
             return None
 
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(self.config_dir, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 return data[name]
         except Exception:
             return None
 
     def yaml_save(self, name: str, data: Dict):
-        path = self.config_dir / f"{name}.yaml"
+        path = self.config_dir.replace(".json", ".yaml")
         with open(path, "w", encoding="utf-8") as f:
             yaml.safe_dump(data, f)
 
     def json_save(self, name: str, data: Dict):
-        path = self.config_dir / f"{name}.json"
-        if os.path.exists():
+        path = self.config_dir
+        if os.path.exists(path):
             with open(path, "a", encoding="utf-8") as f:
                 json.dump(data, f, indent=4)

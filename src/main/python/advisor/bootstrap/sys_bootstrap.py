@@ -9,7 +9,7 @@ class SystemBootstrap:
         self.config_loader = ConfigLoader(Path("configs.json"))
         self.states = StateManager()
 
-    def run(self) -> dict[str, dict]:
+    def _load_setup_cfg(self) -> dict[str, dict]:
         user_cfg = self.config_loader.json_load("user")
         bot_cfg = self.config_loader.json_load("bot")
 
