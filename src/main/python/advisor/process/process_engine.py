@@ -33,17 +33,17 @@ class ManagedProcess:
     Metadata wrapper around a child process
     """
 
-    def __init__(self, name, target, args):
+    def __init__(self, name, target, args=(), dependencies=None):
         self.name = name
         self.target = target
         self.args = args
+        self.dependencies = dependencies or []
 
         self.process: Process | None = None
         self.last_heartbeat: datetime | None = None
         self.restart_count = 0
 
 class Supervisor:
-    HEARTBEAT_TIMEOUT = timedelta(seconds=30)
     """
     Crash-safe process supervisor.
     """
@@ -51,26 +51,20 @@ class Supervisor:
     STATE_FILE = Path("runtime/supervisor_state.json")
 
     MAX_RESTARTS = 5
+    HEARTBEAT_TIMEOUT = timedelta(seconds=30)
     RESTART_BACKOFF = 5  # seconds
 
-    def __init__(self, botState: state.BotState):
+    def __init__(self, State: state.StateManager):
         self.shutdown = Event()
         self.manager = Manager()
+        self.stateManager = State
 
-        self.last_backtest = None
-        
         self.registry = ResourceRegistry(self.manager)
-
-        # shared heartbeat dict: {process_name: timestamp}
         self.heartbeats = self.manager.dict()
-        self.stateManager = state.StateManager(self.manager)
         self.health_bus = health_bus.HealthBus(self.manager)
-        self.restart_store = restart_store.RestartStore()
-        self.restart_counts: dict[str, int] = {}
-        self.dep_graph = dependency_graph.DependencyGraph()
 
+        self.dep_graph = dependency_graph.DependencyGraph()
         self.processes: Dict[str, ManagedProcess] = {}
-        self._load_state()
 
         signal.signal(signal.SIGINT, self._handle_shutdown)
         signal.signal(signal.SIGTERM, self._handle_shutdown)
@@ -139,10 +133,10 @@ class Supervisor:
             name=name,
             target=target,
             args=args,
+            dependencies=dependencies
         )
         self.processes[name] = proc
-        self.restart_counts.setdefault(name, 0)
-        self.dep_graph.add(name, dependencies)
+        self.dep_graph.add(name, dependencies or [])
 
     def _start_process(self, proc: ManagedProcess):
         logger.info(f"▶ Starting {proc.name}")
@@ -154,13 +148,6 @@ class Supervisor:
         )
         proc.process.start()
         proc.last_heartbeat = datetime.utcnow()
-
-    def start_all(self):
-        """starts all registered processes and the monitering loop
-        """        
-        for name, proc in self.processes.items():
-            self._start_process(proc)
-        self.monitor()
 
     def _restart(self, proc: ManagedProcess):
         if proc.restart_count >= self.MAX_RESTARTS:
@@ -180,10 +167,9 @@ class Supervisor:
         self._start_process(proc)
         self.stateManager.set_state(state.BotState.state.RUNNING)
 
-        # -------------------------
+    # -------------------------
     # Boot Order
     # -------------------------
-
     def start(self):
         self.stateManager.set_state(state.BotState.state.STARTING)
 
@@ -219,7 +205,7 @@ class Supervisor:
                     logger.error(f"Process crashed: {name}")
                     self.restart_counts[name] += 1
                     self._persist_state()
-
+                    
                     self._restart(proc)
                 hb = self.heartbeats.get(name)
                 if hb:
@@ -227,6 +213,7 @@ class Supervisor:
                     if datetime.utcnow() - last > self.HEARTBEAT_TIMEOUT:
                         logger.error(f"Heartbeat timeout: {name}")
                         self._restart(proc)
+            self.stateManager.set_state(BotState.state.RUNNING)
             self._maybe_run_backtest()
             time.sleep(1)
 
@@ -257,22 +244,38 @@ if __name__ == "main":
     from advisor.indicators.strategy import strategyManager as strategy_process
     from advisor.Trade.TradesAlgo import MT5TradingAlgorithm as execution_process
     from advisor.core.state import BotState, StateManager
-    from 
+    from advisor.utils.config_handler import ConfigLoader
+    from advisor.GUI.userInput import UserGUI as setUpWizard
+    cfg_bot = {}
+    cfg_user = {}
+    botState = None
+    stateManager = None
     try:
-        """
-        load configs
-            cfg = {}
-            cfg["bot_cfg"] = loader.json_load("bot")
-            cfg["user_cfg"] = loader.json_load("user")
-            if cfg["user_cfg"] or not cfg["user_cfg"]:
-                cfg = setUpWizard()
-        """
+        # load configs
+        loader = ConfigLoader("configs.json")
 
-        #establish mt5 connection and symbol fetch
+        cfg_bot["bot_cfg"] = loader.json_load("bot")
+        cfg_user["user_cfg"] = loader.json_load("user")
+        # if user config is missing, launch setup wizard to create it and load into state manager for access by other processes
+        if cfg_bot["bot_cfg"] is None or cfg_user["user_cfg"].get("account") is None:
+            cfg = setUpWizard()
+            botState = StateManager().loadBotState
+        else:
+            # load from config file
+            v = cfg_bot["version"]
+            last_backtest = cfg_bot["last_backtest_run"]
+            botState = BotState(v, last_backtest)
+        # establish mt5 connection and symbol fetch
         client = MetaTrader5Client()
-        if not client.login(cfg["user_cfg"])
+        user_data = {
+            "account": cfg_user["user_cfg"]["account"],
+            "password": cfg_user["user_cfg"]["password"],
+            "server": cfg_user["user_cfg"]["server"],
+        }
+        if not client.logIn(user_data):
             raise ConnectionError
         """
+            pass data on to supervisor
             -------------
                         |
                         |
@@ -280,15 +283,19 @@ if __name__ == "main":
 
         """
         cache_handler = CacheManager()
-        registry = ResourceRegistry()
-        orch = Supervisor()
-        
-        pl = pipeline_process(client, cache_handler, registry, health_bus, orch.heartbeats, orch.shutdown, orch.bot_state, orch.stateManager)
-        orch.register_process("pipeline", pl.schedule_pipeline() )  # pyright: ignore[reportUndefinedVariable]
-        orch.register_process("backtest", backtest_process, (client, cache_handler, registry, health_bus, orch.heartbeats, orch.shutdown, orch.bot_state, orch.stateManager), depends=["pipeline"])  # pyright: ignore[reportUndefinedVariable]
-        orch.register_process("strategy", strategy_process, (client, cache_handler, registry, health_bus, orch.heartbeats, orch.shutdown, orch.bot_state, orch.stateManager), depends=["pipeline", "backtest"])  # pyright: ignore[reportUndefinedVariable]
-        orch.register_process("execution", execution_process, (client, cache_handler, registry, health_bus, orch.heartbeats, orch.shutdown, orch.bot_state, orch.stateManager), depends=["strategy"])
+
+        orch = Supervisor(botState, stateManager)
+
+        pl = pipeline_process(client, cache_handler, orch.registry, health_bus, orch.heartbeats, orch.shutdown, orch.bot_state, orch.stateManager)
+        orch.register_process("pipeline", pl.schedule_pipeline)  # pyright: ignore[reportUndefinedVariable]
+        orch.register_process("backtest", backtest_process, (client, cache_handler, orch.registry, health_bus, orch.heartbeats, orch.shutdown, orch.tate, orch.stateManager), depends=["pipeline"])  # pyright: ignore[reportUndefinedVariable]
+        orch.register_process("strategy", strategy_process, (client, cache_handler, orch.registry, health_bus, orch.heartbeats, orch.shutdown, orch.stateManager, orch.stateManager), depends=["pipeline", "backtest"])  # pyright: ignore[reportUndefinedVariable]
+        orch.register_process("execution", execution_process, (client, cache_handler, orch.registry, health_bus, orch.heartbeats, orch.shutdown, orch.bot_state, orch.stateManager), depends=["strategy"])
 
         orch.start_all()
     except Exception as e:
         logger.critical(f"Supervisor failed to start: {e}", exc_info=True)
+    finally:
+        # kill all sub
+        orch.shutdown.set()
+        client.close()

@@ -7,7 +7,7 @@ from dateutil.relativedelta import relativedelta
 import threading
 from typing import Optional
 
-from advisor.mt5_pipeline.Client.mt5Client import MetaTrader5Client
+from advisor.Client.mt5Client import MetaTrader5Client
 from advisor.indicators.MovingAverage import MovingAverage as MA
 from advisor.utils.dataHandler import CacheManager
 from advisor.scheduler.resource_registry import ResourceRegistry
@@ -34,7 +34,7 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-BACKTEST_STATE_FILE = Path("config.json")
+STATE_FILE = Path("config.json")
 BACKTEST_INTERVAL_DAYS = 90  # ≈ 3 months
 class backtestProcess:
     name = "Backtest_Process"
@@ -66,16 +66,16 @@ class backtestProcess:
         self._state = stateManager
 
     def load_last_backtest_time(self) -> datetime | None:
-        if not BACKTEST_STATE_FILE.exists():
+        if not STATE_FILE.exists():
             return None
 
-        with open(BACKTEST_STATE_FILE, "r") as f:
-            data = json.load(f)
-            return datetime.fromisoformat(data["last_backtest"])
+        with open(STATE_FILE, "r") as f:
+            data: dict = json.load(f)
+            return datetime.fromisoformat(data.get("bot_configs")("last_backtest"))
 
     def save_last_backtest_time(self, ts: datetime):
-        with open(BACKTEST_STATE_FILE, "w") as f:
-            json.dump({"last_backtest": ts.isoformat()}, f)
+        with open(STATE_FILE, "w") as f:
+            json.dump({"last_backtest": ts.isoformat()}, f, indent=4)
 
     # -------------------------
     # Backtesting Logic
@@ -139,15 +139,19 @@ class backtestProcess:
                 self.cache.set(sym, results[sym]["data"])
 
             self.registry.set_ready("backtest_data")
-            self.registry.set_ready("symbol")
+            self.registry.set_ready("symbols")
 
             self.heartbeats["backtest"] = now
+            self.health_bus.update(
+                self.name,
+                "RUNNING",
+                {"symbols": len(self.cache)}
+            )
 
-            self._state.set_state(self.botState.state.RUNNING)
+            self._state.set_state(BotState.state.RUNNING)
             self._state.schedule_next_backtest()
             logger.info(f"Backtest cycle completed. Next cycle scheduled for {self.next_cycle}.")
         except Exception as e:
-            logger.critical(f"Backtest process fail: {e}", exc_info=True)
             self.health_bus.update(self.name, "CRASHED", {"ERROR": str(e)})
             raise
 
@@ -161,7 +165,9 @@ class backtestProcess:
                 BACKTEST_REQS,
                 self.run_backtest_cycle,
                 self.stop_event,
-                self.heartbeats
+                self.heartbeats,
+                shutdown_event=self.stop_event,
+                timeout=60
             )
         except Exception as e:
             self._state.set_state(BotState.state.DEGRADED)

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from advisor.indicators.MovingAverage.MovingAverage import MovingAverageCrossover
 # from advisor.indicators.Volume.volumeindex import VolumeIndex
 from advisor.utils.dataHandler import dataHandler
-from advisor.mt5_pipeline.Client.mt5Client import MetaTrader5Client
+from advisor.Client.mt5Client import MetaTrader5Client
 from advisor.scheduler.resource_registry import ResourceRegistry
 from advisor.core.health_bus import HealthBus
 from advisor.scheduler.requirements import ProcessRequirement
@@ -17,7 +17,7 @@ from advisor.scheduler.process_sceduler import ProcessScheduler
 STRATEGY_REQS = [
     ProcessRequirement("market_data", max_age=timedelta(minutes=2)),
     ProcessRequirement("backtest", max_age=timedelta(days=90)),
-    ProcessRequirement("symbols")
+    ProcessRequirement("symbols", max_age=timedelta(days=90))
 ]
 # -------------------------
 # Logging Configuration
@@ -58,7 +58,9 @@ class strategyManager:
         heartbeats: dict,  # shared heartbeat state(Authorative)
         health_bus: HealthBus,  # shared health bus state(Authorative)
         registry: ResourceRegistry,
-        max_workers: int = 8
+        scheduler: ProcessScheduler,
+        max_workers: int = 8,
+        interval=5,
     ):
         self.symbols = client.symbols
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
@@ -68,7 +70,7 @@ class strategyManager:
         self.heartbeats = heartbeats
         self.stop_event = shutdown_event
         self.symbol_managers: Dict[str, SymbolStrategyManager] = {}
-        self.scheduler = ProcessScheduler(registry)
+        self.scheduler = scheduler
 
         self._init_symbols()
 
@@ -125,7 +127,7 @@ class strategyManager:
                     continue
 
                 futures[self.executor.submit(
-                    self._safe_execute,
+                    self._run_,
                     symbol,
                     strategy
                 )] = symbol
@@ -137,24 +139,35 @@ class strategyManager:
                 if result is not None:
                     results[symbol] = result
                 self.heartbeats[self.name] = datetime.utcnow().isoformat()
-                self.healthbus.update(self.name, "RUNNING")
+                self.healthbus.update(
+                    self.name,
+                    "RUNNING",
+                    {"symbols": len(self.cache)}
+                )
             return results
         except Exception as e:
             self.healthbus.update(self.name, "CRASHED", {"ERROR": str(e)})
             return None
 
     # -------------------------------
-    # Safety Wrapper
+    # chosen Strategy Safety Wrapper
     # -------------------------------
-    def _safe_execute(self, symbol: str, strategy: object) -> Optional[dict]:
+    def _run_(self, symbol: str, strategy: object) -> Optional[dict]:
         try:
-            return self.scheduler.schedule(
-                self.name,
-                STRATEGY_REQS,
-                strategy.run(),
-                self.stop_event,
-                self.heartbeats
-            )
+            return strategy.run,
         except Exception as e:
             logger.critical(f"{symbol} Backtest process fail: {e}", exc_info=True)
             raise
+
+    def _safe_execute(self):
+        try:
+            return self.scheduler.schedule(
+                process_name=self.name,
+                required_resources=STRATEGY_REQS,
+                task=self.run_strategy,
+                shutdown_event=self.stop_event,
+                heartbeats=self.heartbeats,
+                timeout=60
+            )
+        except Exception as e:
+            logger.critical(f"{self.name} process fail: {e}", exc_info=True)
