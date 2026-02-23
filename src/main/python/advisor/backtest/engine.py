@@ -1,11 +1,11 @@
 import logging
+import asyncio
+import sys
 from pathlib import Path
 import json
-import sys
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 import threading
-from typing import Optional
 
 from advisor.Client.mt5Client import MetaTrader5Client
 from advisor.indicators.MovingAverage import MovingAverage as MA
@@ -48,11 +48,13 @@ class backtestProcess:
         heartbeats: dict,
         shutdown_event: threading.Event,
         botState: BotState,
-        stateManager: StateManager
+        stateManager: StateManager,
+        scheduler: ProcessScheduler,
     ):
         self.client = client
         self.cache = cache_handler
         self.registry = registry
+
         self.registry.register("backtest_data")
         self.registry.register("symbols")
 
@@ -60,8 +62,7 @@ class backtestProcess:
         self.heartbeats = heartbeats
         self.stop_event = shutdown_event
 
-        self.next_cycle = datetime.date()
-        self.scheduler = ProcessScheduler(registry)
+        self.scheduler = scheduler
         self.botState = botState
         self._state = stateManager
 
@@ -70,8 +71,10 @@ class backtestProcess:
             return None
 
         with open(STATE_FILE, "r") as f:
-            data: dict = json.load(f)
-            return datetime.fromisoformat(data.get("bot_configs")("last_backtest"))
+            data = json.load(f)
+
+        ts = data.get("last_backtest")
+        return datetime.fromisoformat(ts) if ts else None
 
     def save_last_backtest_time(self, ts: datetime):
         with open(STATE_FILE, "w") as f:
@@ -80,99 +83,112 @@ class backtestProcess:
     # -------------------------
     # Backtesting Logic
     # -------------------------
-    def backtest_all_symbols(self, symbols: list[str]) -> dict:
-        """
-        Backtest all symbols and return performance registry.
-        """
+    async def _backtest_all_symbols(self, symbols: list[str]) -> dict:
 
         results = {}
 
         for symbol in symbols:
             try:
-                data = self.client.get_multi_tf_data(symbol)
+                data = await asyncio.to_thread(
+                    self.client.get_multi_tf_data,
+                    symbol
+                )
+
                 indicator = MA.MovingAverageCrossover(symbol, data)
                 indicator.backtest = True
-                data = indicator.run()
-                results[symbol] = data
+
+                output = await asyncio.to_thread(indicator.run)
+
+                results[symbol] = output
 
             except Exception as e:
                 logger.warning(f"Backtest failed for {symbol}: {e}")
-        indicator.backtest = False
+
         return results
 
-    def select_best_symbols(self, results: dict, min_score=0.78) -> list:
-        """
-        Select best-performing symbols based on backtest metrics.
-        """
-        symbols = metrics.metrics.rank_symbols(results.get("summaries"), results.get("data"))
-        for symbol in symbols:
-            sym_score = symbol.get("summaries")("score")
-            if sym_score <= min_score:
-                symbols.remove(symbol)
-                state = SymbolState(symbol, sym_score, datetime.now())
-                self.botState.symbols.update({symbol: state})
-            else:
-                self.botState.symbols.update({symbol: SymbolState(symbol, sym_score, datetime.now(), enabled=True)})
-        return symbols
+    def _select_best_symbols(self, results: dict, min_score=0.78) -> list:
 
-    def run_backtest_cycle(self):
-        """
-        Run quarterly backtest and update active symbols.
-        """
-        now = datetime.now()
+        ranked = metrics.metrics.rank_symbols(
+            results.get("summaries"),
+            results.get("data")
+        )
+
+        selected = []
+
+        for symbol_data in ranked:
+            sym = symbol_data["symbol"]
+            score = symbol_data["score"]
+
+            new_state = SymbolState(sym, score, datetime.now(datetime.timezone.utc), True)
+            self.botState.symbols[sym] = new_state
+
+        return selected
+
+    async def _backtest_cycle(self):
+        now = datetime.now(datetime.timezone.utc)
         last_run = self._state.last_backtest_run
+
         if last_run and now < last_run + relativedelta(months=3):
-            return  # Too early
-        try:
-            logger.info(f"Starting scheduled backtest cycle. date now: {now}, next cycle: {self.next_cycle}")
-            self._state.set_state(BotState.state.RUNNING_BACKTEST)
+            return  # Not time yet
 
-            results = self.backtest_all_symbols(self.client.symbols)
-            best_symbols = self.select_best_symbols(results=results)
+        logger.info("Starting scheduled backtest cycle")
 
-            # Activate only best symbols
-            self.client.symbols.clear()
-            self.client.symbols = best_symbols
+        self._state.set_state(BotState.state.RUNNING_BACKTEST)
+        self.botState.backtest_running = True
 
-            # cache best performing symbol data
-            for sym in self.client.symbols:
-                self.cache.set(sym, results[sym]["data"])
+        results = await self._backtest_all_symbols(self.client.symbols)
 
-            self.registry.set_ready("backtest_data")
-            self.registry.set_ready("symbols")
+        best_symbols = self._select_best_symbols(results)
 
-            self.heartbeats["backtest"] = now
-            self.health_bus.update(
-                self.name,
-                "RUNNING",
-                {"symbols": len(self.cache)}
-            )
+        # Update active symbols safely
+        self.client.symbols = list(best_symbols)
 
-            self._state.set_state(BotState.state.RUNNING)
-            self._state.schedule_next_backtest()
-            logger.info(f"Backtest cycle completed. Next cycle scheduled for {self.next_cycle}.")
-        except Exception as e:
-            self.health_bus.update(self.name, "CRASHED", {"ERROR": str(e)})
-            raise
+        # Cache best performing data
+        for sym in best_symbols:
+            self.cache.set_atomic(sym, results[sym]["data"])
+
+        self.registry.set_ready("backtest_data")
+        self.registry.set_ready("symbols")
+
+        self.save_last_backtest_time(now)
+
+        self._state.set_state(BotState.state.RUNNING)
+        self.botState.backtest_running = False
+        self.health_bus.update(
+            self.name,
+            "RUNNING",
+            {"active_symbols": len(best_symbols)}
+        )
+
+        logger.info("Backtest cycle completed")
 
     # -------------------------------
     # Safety Wrapper
     # -------------------------------
-    def _backtest_safe_execute(self) -> Optional[dict]:
-        try:
-            return self.scheduler.schedule(
-                self.name,
-                BACKTEST_REQS,
-                self.run_backtest_cycle,
-                self.stop_event,
-                self.heartbeats,
+    async def _run_loop(self):
+
+        while not self.stop_event.is_set():
+
+            await self.scheduler.schedule(
+                process_name=self.name,
+                required_resources=BACKTEST_REQS,
+                task=self._backtest_cycle,
                 shutdown_event=self.stop_event,
-                timeout=60
+                heartbeats=self.heartbeats,
+                timeout=600,  # backtest may take longer
             )
+            
+            await asyncio.sleep(5)
+
+    def start(self):
+        try:
+            asyncio.run(self._run_loop())
         except Exception as e:
             self._state.set_state(BotState.state.DEGRADED)
-            logger.critical(f"Backtest process fail: {e}", exc_info=True)
+            logger.critical(f"{self.name} crashed: {e}", exc_info=True)
+            self.health_bus.update(
+                self.name,
+                "CRASHED",
+                {"error": str(e)}
+            )
             raise
-
-    def stop(self):
-        self.stop_event.clear()

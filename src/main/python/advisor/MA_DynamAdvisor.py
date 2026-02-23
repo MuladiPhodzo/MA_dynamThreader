@@ -17,7 +17,7 @@ from advisor.utils.cache import CacheManager as cache
 
 from advisor.mt5_pipeline.Client import mt5Client
 from advisor.indicators.MovingAverage import MovingAverage as MA
-from advisor.Trade import TradesAlgo as algorithim
+from Trade import tradeHandler as algorithim
 from advisor.GUI import userInput as gui
 from advisor.Telegram.runner import run as TelegramRunner
 

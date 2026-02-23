@@ -38,7 +38,7 @@ class ProcessScheduler:
         then executes the task safely.
         """
 
-        start = datetime.utcnow()
+        start = datetime.now(datetime.timezone.utc)
 
         # ---------------------------
         # WAIT FOR RESOURCES
@@ -46,12 +46,12 @@ class ProcessScheduler:
         while not shutdown_event.is_set():
 
             # heartbeat while waiting
-            heartbeats[process_name] = datetime.utcnow().isoformat()
+            heartbeats[process_name] = datetime.now(datetime.timezone.utc).isoformat()
 
             if self._resources_ready(required_resources):
                 break
 
-            if timeout and datetime.utcnow() - start > timedelta(seconds=timeout):
+            if timeout and datetime.now(datetime.timezone.utc) - start > timedelta(seconds=timeout):
                 logger.error(
                     f"[{process_name}] Scheduler timeout waiting for {required_resources}"
                 )

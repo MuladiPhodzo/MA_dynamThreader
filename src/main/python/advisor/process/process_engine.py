@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict
 
-from advisor.core import dependency_graph, restart_store, health_bus, state
+from advisor.core import dependency_graph, health_bus, state
 from advisor.scheduler.resource_registry import ResourceRegistry
 from utils.dataHandler import CacheManager
 
@@ -66,6 +66,7 @@ class Supervisor:
         self.dep_graph = dependency_graph.DependencyGraph()
         self.processes: Dict[str, ManagedProcess] = {}
 
+        self.last_backtest: datetime = self.stateManager.last_backtest_run
         signal.signal(signal.SIGINT, self._handle_shutdown)
         signal.signal(signal.SIGTERM, self._handle_shutdown)
 
@@ -147,7 +148,7 @@ class Supervisor:
             daemon=True
         )
         proc.process.start()
-        proc.last_heartbeat = datetime.utcnow()
+        proc.last_heartbeat = datetime.now(datetime.timezone.utc)
 
     def _restart(self, proc: ManagedProcess):
         if proc.restart_count >= self.MAX_RESTARTS:
@@ -205,12 +206,12 @@ class Supervisor:
                     logger.error(f"Process crashed: {name}")
                     self.restart_counts[name] += 1
                     self._persist_state()
-                    
+
                     self._restart(proc)
                 hb = self.heartbeats.get(name)
                 if hb:
                     last = datetime.fromisoformat(hb)
-                    if datetime.utcnow() - last > self.HEARTBEAT_TIMEOUT:
+                    if datetime.now(datetime.timezone.utc) - last > self.HEARTBEAT_TIMEOUT:
                         logger.error(f"Heartbeat timeout: {name}")
                         self._restart(proc)
             self.stateManager.set_state(BotState.state.RUNNING)
@@ -223,13 +224,13 @@ class Supervisor:
 
     def _maybe_run_backtest(self):
         if not self.last_backtest:
-            self.last_backtest = datetime.utcnow()
+            self.last_backtest = datetime.now(datetime.timezone.utc)
             self._persist_state()
             return
 
-        if datetime.utcnow() - self.last_backtest >= timedelta(days=90):
+        if datetime.now(datetime.timezone.utc) - self.last_backtest >= timedelta(days=90):
             logger.info("Triggering scheduled backtest")
-            self.last_backtest = datetime.utcnow()
+            self.last_backtest = datetime.now(datetime.timezone.utc)
             self._persist_state()
             # Backtest process should be signaled here
             backtest = self.processes.get("backtest_engine")
@@ -242,7 +243,7 @@ if __name__ == "main":
     from advisor.backtest.engine import backtestProcess as backtest_process
     from advisor.mt5_pipeline.runner import pipelineProcess as pipeline_process
     from advisor.indicators.strategy import strategyManager as strategy_process
-    from advisor.Trade.TradesAlgo import MT5TradingAlgorithm as execution_process
+    from Trade.trade_engine import ExecutionProcess
     from advisor.core.state import BotState, StateManager
     from advisor.utils.config_handler import ConfigLoader
     from advisor.GUI.userInput import UserGUI as setUpWizard
@@ -286,16 +287,20 @@ if __name__ == "main":
 
         orch = Supervisor(botState, stateManager)
 
-        pl = pipeline_process(client, cache_handler, orch.registry, health_bus, orch.heartbeats, orch.shutdown, orch.bot_state, orch.stateManager)
-        orch.register_process("pipeline", pl.schedule_pipeline)  # pyright: ignore[reportUndefinedVariable]
-        orch.register_process("backtest", backtest_process, (client, cache_handler, orch.registry, health_bus, orch.heartbeats, orch.shutdown, orch.tate, orch.stateManager), depends=["pipeline"])  # pyright: ignore[reportUndefinedVariable]
-        orch.register_process("strategy", strategy_process, (client, cache_handler, orch.registry, health_bus, orch.heartbeats, orch.shutdown, orch.stateManager, orch.stateManager), depends=["pipeline", "backtest"])  # pyright: ignore[reportUndefinedVariable]
-        orch.register_process("execution", execution_process, (client, cache_handler, orch.registry, health_bus, orch.heartbeats, orch.shutdown, orch.bot_state, orch.stateManager), depends=["strategy"])
+        pl = pipeline_process(client, cache_handler, orch.registry, health_bus, orch.heartbeats, orch.shutdown, orch.stateManager, orch.stateManager)
+        backtest = backtest_process(client, cache_handler, orch.registry, health_bus, orch.heartbeats, orch.shutdown, orch.tate, orch.stateManager)
+        startegy = strategy_process(client, cache_handler, orch.registry, health_bus, orch.heartbeats, orch.shutdown, orch.stateManager, orch.stateManager)
+        _exec = ExecutionProcess(client, orch.signal_store, orch.TradeState, orch.registry, health_bus, orch.heartbeats, orch.shutdown, orch.stateManager, orch.stateManager)
 
-        orch.start_all()
+        orch.register_process(name="pipeline", target=pl.start, *(), depends=[])
+        orch.register_process("backtest", backtest.start, *(), depends=["pipeline"])
+        orch.register_process("strategy", startegy.start, *(), depends=["pipeline", "backtest"])
+        orch.register_process("execution", _exec.start, *(), depends=["strategy"])
+
+        orch.start()
     except Exception as e:
         logger.critical(f"Supervisor failed to start: {e}", exc_info=True)
     finally:
-        # kill all sub
-        orch.shutdown.set()
+        # kill all child processes
+        orch.stop_all()
         client.close()

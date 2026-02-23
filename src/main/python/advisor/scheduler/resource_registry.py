@@ -14,13 +14,13 @@ class ResourceRegistry:
     def set_ready(self, name: str):
         self._resources[name] = ResourceStatus(
             ResourceState.READY,
-            datetime.utcnow()
+            datetime.now(datetime.timezone.utc)
         )
 
     def set_state(self, name: str, state: ResourceState):
         self._resources[name] = ResourceStatus(
             state,
-            datetime.utcnow()
+            datetime.now(datetime.timezone.utc)
         )
 
     def get(self, name: str) -> ResourceStatus | None:

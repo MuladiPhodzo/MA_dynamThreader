@@ -52,6 +52,7 @@ class StateManager:
                 raw: dict = json.load(f)
 
             return BotState(
+                version=raw["version"],
                 last_backtest_run=StateManager._parse_dt(raw.get("last_backtest_run"), datetime.now()),
                 next_backtest_run=StateManager._parse_dt(raw.get("next_backtest_run"), datetime.now() + timedelta(days=90)),
                 symbols={
@@ -122,8 +123,8 @@ class StateManager:
         if not state.next_backtest_run:
             return True
 
-        return datetime.utcnow() >= state.next_backtest_run
+        return datetime.now(datetime.timezone.utc) >= state.next_backtest_run
 
     def schedule_next_backtest(state: BotState):
-        state.last_backtest_run = datetime.utcnow()
+        state.last_backtest_run = datetime.now(datetime.timezone.utc)
         state.next_backtest_run = state.last_backtest_run + timedelta(days=90)

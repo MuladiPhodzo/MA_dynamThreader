@@ -1,9 +1,12 @@
 import sys
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, Optional
+import time
+from typing import Dict
 import threading
 from datetime import datetime, timedelta
+import asyncio
+
 from advisor.indicators.MovingAverage.MovingAverage import MovingAverageCrossover
 # from advisor.indicators.Volume.volumeindex import VolumeIndex
 from advisor.utils.dataHandler import dataHandler
@@ -12,10 +15,12 @@ from advisor.scheduler.resource_registry import ResourceRegistry
 from advisor.core.health_bus import HealthBus
 from advisor.scheduler.requirements import ProcessRequirement
 from advisor.scheduler.process_sceduler import ProcessScheduler
+from .signal_store import SignalStore
+from advisor.core.state import BotState, StateManager
 
 
 STRATEGY_REQS = [
-    ProcessRequirement("market_data", max_age=timedelta(minutes=2)),
+    ProcessRequirement("market_data", max_age=timedelta(minutes=5)),
     ProcessRequirement("backtest", max_age=timedelta(days=90)),
     ProcessRequirement("symbols", max_age=timedelta(days=90))
 ]
@@ -59,19 +64,24 @@ class strategyManager:
         health_bus: HealthBus,  # shared health bus state(Authorative)
         registry: ResourceRegistry,
         scheduler: ProcessScheduler,
-        max_workers: int = 8,
+        store: SignalStore,
+        state: StateManager,
+        max_workers: int = 5,
         interval=5,
     ):
         self.symbols = client.symbols
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
 
         self.registry = registry
+        self.registry.register("signals")
         self.healthbus = health_bus
         self.heartbeats = heartbeats
         self.stop_event = shutdown_event
         self.symbol_managers: Dict[str, SymbolStrategyManager] = {}
         self.scheduler = scheduler
-
+        self.state = state
+        self.signal_store = store
+        self.interval = interval
         self._init_symbols()
 
     def shutdown(self):
@@ -86,12 +96,13 @@ class strategyManager:
         """
         for symbol in self.symbols:
             manager = SymbolStrategyManager(symbol)
-
             manager.register(
                 "MA",
                 MovingAverageCrossover(
                     symbol=symbol,
-                    data=dataHandler(symbol, "EMA")
+                    data=dataHandler(symbol, "EMA"),
+                    heartbeats=self.heartbeats,
+                    healthbus=self.healthbus
                 )
             )
             logger.info(f"MA startegy initialized for {symbol}")
@@ -99,7 +110,9 @@ class strategyManager:
             # manager.register(
             #     "VOLUME",
             #     VolumeIndex(
-            #         dataHandler(symbol, "VOLUME")
+            #         dataHandler(symbol, "VOLUME"),
+            #         heartbeats=self.heartbeats,
+            #         healthbus=self.healthbus
             #     )
             # )
 
@@ -110,64 +123,64 @@ class strategyManager:
     # Execution
     # -------------------------------
 
-    def run_strategy(
-        self,
-        strategy_name: str
-    ) -> Optional[Dict[str, dict]]:
-        """
-        Runs a single strategy across all symbols in parallel.
-        """
+    def start(self):
         try:
-            futures = {}
-            results: Dict[str, dict] = {}
-
-            for symbol, manager in self.symbol_managers.items():
-                strategy = manager.get(strategy_name)
-                if not strategy:
-                    continue
-
-                futures[self.executor.submit(
-                    self._run_,
-                    symbol,
-                    strategy
-                )] = symbol
-
-            for future in as_completed(futures):
-                symbol = futures[future]
-                result = future.result()
-
-                if result is not None:
-                    results[symbol] = result
-                self.heartbeats[self.name] = datetime.utcnow().isoformat()
-                self.healthbus.update(
-                    self.name,
-                    "RUNNING",
-                    {"symbols": len(self.cache)}
-                )
-            return results
+            asyncio.run(self._safe_execute())
+            time.sleep(self.interval)
         except Exception as e:
-            self.healthbus.update(self.name, "CRASHED", {"ERROR": str(e)})
-            return None
-
-    # -------------------------------
-    # chosen Strategy Safety Wrapper
-    # -------------------------------
-    def _run_(self, symbol: str, strategy: object) -> Optional[dict]:
-        try:
-            return strategy.run,
-        except Exception as e:
-            logger.critical(f"{symbol} Backtest process fail: {e}", exc_info=True)
+            self.state.set_state(BotState.state.DEGRADED)
+            logger.critical(f"{self.name} crashed: {e}", exc_info=True)
+            self.healthbus.update(
+                self.name,
+                "CRASHED",
+                {"error": str(e)}
+            )
             raise
 
-    def _safe_execute(self):
-        try:
-            return self.scheduler.schedule(
+    async def _safe_execute(self):
+        while not self.stop_event.is_set():
+            await self.scheduler.schedule(
                 process_name=self.name,
                 required_resources=STRATEGY_REQS,
-                task=self.run_strategy,
+                task=await self._run_cycle,
                 shutdown_event=self.stop_event,
                 heartbeats=self.heartbeats,
                 timeout=60
             )
-        except Exception as e:
-            logger.critical(f"{self.name} process fail: {e}", exc_info=True)
+            asyncio.sleep(self.interval)
+
+    async def _run_cycle(self):
+        results = {}
+        symbols_ftr = {}
+
+        for symbol, manager in self.symbol_managers.items():
+            symbols_ftr[self.executor.submit(self.run_strategy, manager)] = symbol
+
+        for s in as_completed(symbols_ftr):
+            res = s.result()
+            results[symbol] = res  # process signals from response
+
+        self.heartbeats[self.name] = datetime.now(datetime.timezone.utc).isoformat()
+
+        self.healthbus.update(
+            self.name,
+            "RUNNING",
+            {"symbols": len(self.symbol_managers)}
+        )
+
+        return results
+
+    async def run_strategy(symbol, manager: SymbolStrategyManager):
+        results = {}
+        for strategy_name in manager.available_strategies():
+            strategy = manager.get(strategy_name)
+
+            try:
+                result = strategy.run()  # all strategies must expose run() method
+                if result:
+                    results.setdefault(symbol, {})[strategy_name] = result
+            except Exception as e:
+                logger.error(
+                    f"{symbol} {strategy_name} failed: {e}",
+                    exc_info=True
+                )
