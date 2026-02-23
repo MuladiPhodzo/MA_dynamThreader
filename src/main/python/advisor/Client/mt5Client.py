@@ -185,7 +185,7 @@ class MetaTrader5Client:
         interval = self.TF_dict[tf_name]["interval_minutes"]
 
         key = (symbol, tf_name)
-        now = datetime.utcnow()
+        now = datetime.now(datetime.timezone.utc)
 
         with self._tf_lock:
             last_fetch = self._tf_last_fetch.get(key)

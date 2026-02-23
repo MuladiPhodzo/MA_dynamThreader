@@ -24,7 +24,7 @@ logging.basicConfig(
     ],
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("Data_store")
 
 
 class CacheManager:
@@ -96,12 +96,12 @@ class dataHandler:
         self.dir_name = os.path.dirname(f"{self.symbol}_{strategy}")
         self.cache_handler = cache
 
-        self.data : Dict[str, pd.DataFrame] = self.cache_handler.get(symbol)
+        self.data : Dict[str, pd.DataFrame] = {}
+        self.fetch()
         self.all_timestamps = set(
             self.all_timestamps.update(df)
             for tf, df in self.data.items())
 
-        self.trades = pd.DataFrame()
         self.max_bars = max_bars
 
         self.process_lock = PROCESS_LOCK
@@ -151,8 +151,8 @@ class dataHandler:
         """
         Atomically write symbol data.
         """
-        with self._process_lock:
-            with self._thread_lock:
+        with self.process_lock:
+            with self.thread_lock:
                 try:
                     data_path = self._data_path(symbol)
                     meta_path = self._meta_path(symbol)
@@ -236,7 +236,7 @@ class dataHandler:
         df.sort_index(inplace=True)
         return df
 
-    def save_trades(self, trade_data, file_type="json"):
+    def save_trade(self, trade_data, file_type="json"):
         """
         Saves trade information to a file (JSON or CSV).
 
@@ -354,6 +354,15 @@ class dataHandler:
                     pass
                 except Exception:
                     logger.exception(f"Failed deleting cache for {symbol}")
+
+    # refresh data every 5 minutes
+    def fetch(self):
+        while True:
+            with self.process_lock:
+                with self.lock:
+                    data = self.cache_handler.get(self.symbol)
+                    self.set_data(data)
+                    time.sleep(60 * 15)
 
     # Saves every 5 minutes
     def _auto_save(self):

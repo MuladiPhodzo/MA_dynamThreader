@@ -6,7 +6,7 @@ from .mt5_pipeline.runner import pipelineProcess
 from .backtest.engine import backtestProcess
 from .indicators import strategy
 from .bootstrap.sys_bootstrap import SystemBootstrap
-from .Trade import TradesAlgo
+from .Trade import tradeHandler
 from .GUI.userInput import UserGUI as setUpWizard
 from .utils.dataHandler import CacheManager, dataHandler
 

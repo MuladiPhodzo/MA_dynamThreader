@@ -11,7 +11,7 @@ class HealthBus:
         self.data[proc_name] = {
             "status": status,
             "meta": meta or {},
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(datetime.timezone.utc).isoformat()
         }
 
     def snapshot(self):
