@@ -4,11 +4,12 @@ import numpy as np
 import pandas as pd
 from collections.abc import Iterable
 # import tabulate
-import MetaTrader5 as mt5
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
 from advisor.utils.dataHandler import dataHandler
+from advisor.core.health_bus import HealthBus
 
 # -------------------------
 # Logging Configuration
@@ -23,21 +24,14 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
-TF_dict = {
-    '15M': mt5.TIMEFRAME_M15,
-    '30M': mt5.TIMEFRAME_M30,
-    '1H': mt5.TIMEFRAME_H1,
-    '2H': mt5.TIMEFRAME_H2,
-    '4H': mt5.TIMEFRAME_H4,
-    '6H': mt5.TIMEFRAME_H6,
-    '8H': mt5.TIMEFRAME_H8,
-    '1D': mt5.TIMEFRAME_D1,
-}
+
 class MovingAverageCrossover:
 
     def __init__(self,
                  symbol,
                  datahandler: dataHandler,
+                 heartbeats: dict,
+                 healthbus: HealthBus,
                  fast_period=50,
                  slow_period=200,
                  pip_distance=250):
@@ -53,15 +47,16 @@ class MovingAverageCrossover:
         self.slow_period = slow_period
         self.pip_distance = pip_distance
         self.executor = ThreadPoolExecutor(max_workers=20)
+        self.healthbus = healthbus
+        self.heartbeats = heartbeats
 
-        self.signals = {}
-        self.results = {}
         self.all_timestamps = set()
         self.data_handler = datahandler
         self.backtest: bool = False
 
+        self.data = self.data_handler.data
         try:
-            self.pip_size = self.get_pip_size(self.data_handler.get('30M'))
+            self.pip_size = self.get_pip_size(self.data.get('30M'))
         except Exception:
             self.pip_size = 0.0001
 
@@ -113,7 +108,7 @@ class MovingAverageCrossover:
             self.all_timestamps.update(df.index)
         return sorted(self.all_timestamps) if self.all_timestamps else None
 
-    def _build_mtf_row_data(self, ts, data: dict):
+    def _build_mtf_row_data(self, ts: dict):
         """Build multi-timeframe snapshot for a given timestamp."""
         def check_tf(tf, df: pd.DataFrame) -> dict:
             row = df.loc[ts]
@@ -130,7 +125,7 @@ class MovingAverageCrossover:
 
         mtf_row_data = {}
         row_futures = {}
-        for tf, df in data.items():
+        for tf, df in self.data.items():
             if ts in df.index:
                 row_futures[self.executor.submit(
                     check_tf,
@@ -270,7 +265,7 @@ class MovingAverageCrossover:
     # ------------------------------------------------------
     # 3) Check Trend Alignment from higher timeframes
     # ------------------------------------------------------
-    def identify_Trend_Alignment(self, data: dict, backtest: bool):
+    def identify_Trend_Alignment(self, backtest: bool):
         """
         Compute an overall Main_Trend label based on latest row of each TF.
         Defensive: skips empty / invalid TFs.
@@ -279,7 +274,7 @@ class MovingAverageCrossover:
             count = 0
             prox_meter = []
 
-            for tf, df in list(data.items()):
+            for tf, df in list(self.data.items()):
                 if not backtest:
                     # only fetch the latest row per df for trend alignment
                     if df is None or not isinstance(df, pd.DataFrame) or df.empty:
@@ -306,24 +301,23 @@ class MovingAverageCrossover:
                             count += 1
 
             prox_true = prox_meter.count(True)
-            majority = len(data) // 2 + 1
+            majority = len(self.data) // 2 + 1
 
             if count >= majority:
-                return self._classify_bullish_trend(count, len(data), prox_true)
+                return self._classify_bullish_trend(count, len(self.data), prox_true)
             elif count <= -majority:
-                return self._classify_bearish_trend(count, len(data), prox_true)
+                return self._classify_bearish_trend(count, len(self.data), prox_true)
 
             return "Neutral"
 
         except Exception as e:
             logger.exception(f"exception in Trend alignment: {e}")
-            self.data["Bias"] = "Error"
             return "Error"
 
     # ------------------------------------------------------
     # 5) sequence proximity entries for lower timeframes
     # ------------------------------------------------------
-    def sequence_Trend_Data(self, data: dict):
+    def sequence_Trend_Data(self):
         """
         Timestamp-aligned multi-timeframe trend evaluation.
 
@@ -340,7 +334,7 @@ class MovingAverageCrossover:
                 return
 
             for ts in common_ts:
-                mtf_row_data = self._build_mtf_row_data(ts, data)
+                mtf_row_data = self._build_mtf_row_self.data(ts, self.data)
 
                 if len(mtf_row_data) == 0:
                     continue
@@ -409,7 +403,7 @@ class MovingAverageCrossover:
                 continue
             df = copyDF
 
-        # self.data[tf] = df
+        # self.self.data[tf] = df
         self.backtest_entries(tf, df, pip_distance)
 
         logger.info(f"🎯 Proximity entries generated for timeframe ({tf})")
@@ -418,7 +412,7 @@ class MovingAverageCrossover:
     # ------------------------------------------------------
     # 7) Backtesting per timeframe
     # ------------------------------------------------------
-    def backtest_entries(self, tf, df: pd.DataFrame, pip_distance=100, tp_factor=2):
+    def backtest_entries(self, tf, df: pd.self.dataFrame, pip_distance=100, tp_factor=2):
         """
         Backtest entries for each timeframe and update the
         original DataFrame with trade results.
@@ -660,11 +654,11 @@ class MovingAverageCrossover:
         logger.info("Backtest completed.")
         return self.results
 
-    def backtest_entries_data(self, data: dict):
+    def backtest_entries_data(self):
         # --- STEP 3: entry detection ---
         entry_futures = {
             self.executor.submit(self.identify_proximity_entries, df, tf): tf
-            for tf, df in data.items()
+            for tf, df in self.data.items()
             if "M" in tf
         }
 
@@ -672,13 +666,13 @@ class MovingAverageCrossover:
         for f in as_completed(entry_futures):
             tf = entry_futures[f]
             df = f.result()
-            data[tf] = df
+            self.data[tf] = df
             if tf in ["15M", "30M"]:
                 summaries[tf] = self.generate_backtest_summary(tf, df)[tf]
 
         return {
             "summaries": summaries,
-            "data": data
+            "data": self.data
         }
 
     def run(self) -> dict[str, pd.DataFrame] | None:
@@ -686,22 +680,21 @@ class MovingAverageCrossover:
         Execute MA strategy on prepared data.
         Returns: a dictionary of performance metrics and backtested data
         """
-        
-        data = self.data_handler.data
         # --- STEP 1: MA calculation (parallel, no early return) ---
         futures = {
             self.executor.submit(self.calculate_moving_averages_data, tf, df): tf
-            for tf, df in data.items()
+            for tf, df in self.data.items()
             if isinstance(df, pd.DataFrame)
         }
 
         for f in as_completed(futures):
             tf = futures[f]
-            data[tf] = f.result()
+            self.data[tf] = f.result()
 
-        # --- STEP 2: sequence synthesis ---
-        self.sequence_Trend_Data(data)
         if self.backtest:
-            data = self.backtest_entries_data(data)
-            return data
-        return data
+            # --- STEP 2: sequence synthesis ---
+            self.sequence_Trend_Data()
+            self.data = self.backtest_entries_data()
+            return self.data
+
+        return self.data

@@ -1,7 +1,8 @@
+import asyncio
 import logging
 import sys
 from typing import Dict
-from advisor.mt5_pipeline.Client.mt5Client import MetaTrader5Client
+from advisor.Client.mt5Client import MetaTrader5Client
 from advisor.utils.dataHandler import CacheManager
 
 # -------------------------
@@ -18,10 +19,10 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+
 class MarketDataPipeline:
     """
     Stateless market data ingestion logic.
-    No scheduling, no sleeping, no threading.
     """
 
     def __init__(self, client: MetaTrader5Client, cache_handler: CacheManager):
@@ -39,17 +40,22 @@ class MarketDataPipeline:
             logger.exception(f"Failed fetching data for {symbol}")
             return None
 
-    def ingest_symbol(self, symbol: str) -> dict | None:
-        data = self.fetch_symbol(symbol)
+    async def ingest_symbol(self, symbol: str) -> dict | None:
+        # Offload blocking MT5 call
+        data = await asyncio.to_thread(self.fetch_symbol, symbol)
         if data is None:
             return None
         return data
 
-    def run_once(self, symbols: list[str]) -> None:
-        for symbol in symbols:
-            data = self.ingest_symbol(symbol)
+    async def run_once(self) -> None:
+        tasks = [
+            self.ingest_symbol(symbol)
+            for symbol in self.client.symbols
+        ]
+
+        results = await asyncio.gather(*tasks)
+
+        for symbol, data in zip(self.client.symbols, results):
             if data is None:
                 continue
-            # atomic per-symbol write
             self.cache.set_atomic(symbol, data)
-

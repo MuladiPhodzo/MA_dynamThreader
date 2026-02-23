@@ -19,4 +19,4 @@ class ResourceStatus:
     def is_fresh(self, max_age: timedelta):
         if not self.last_updated:
             return False
-        return datetime.utcnow() - self.last_updated <= max_age
+        return datetime.now(datetime.timezone.utc) - self.last_updated <= max_age
