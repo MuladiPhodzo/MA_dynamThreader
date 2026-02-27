@@ -6,8 +6,6 @@ import sys
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import datetime
-
-import matplotlib.pyplot as plt
 from tkinter import messagebox
 
 import pandas as pd
@@ -68,10 +66,10 @@ class MetaTrader5Client:
         else:
             return 100
 
-    def logIn(self, user_data):
+    def initialize(self, user_data):
         logger.info("🔑 Logging in to MetaTrader 5...")
 
-        res = self.initialize(user_data)
+        res = self.connect_account(user_data)
 
         if not res:
             messagebox.showerror(
@@ -82,14 +80,18 @@ class MetaTrader5Client:
         else:
             logger.info(
                 f"✅ Successfully connected to MT5 account {user_data['account_id']} on server '{user_data['server']}'")
-            self.account_info = mt5.account_info()
-            self.terminal_info = mt5.terminal_info()
+            self.account_info = mt5.account_info()._asdict()
+            self.terminal_info = mt5.terminal_info()._asdict()
             self.creds = user_data
             logger.info('fetching all available symbols...')
-            self.symbols = self.get_all_symbols()
+            self.symbols = self.get_Symbols()
             return True
 
-    def initialize(self, user_data):
+    def get_acc_attr(self, name):
+        self.account_info = mt5.account_info()._asdict()
+        return self.account_info.get(name)
+
+    def connect_account(self, user_data):
         try:
             if user_data is not None:
                 if not mt5.initialize(login=int(user_data['account_id']),
@@ -126,12 +128,8 @@ class MetaTrader5Client:
         all_symbols = mt5.symbols_get()
         symbols = []
         for symbol in all_symbols:
-            if symbol.visible:
-                symbols.append(symbol.name)
+            symbols.append(symbol.name)
         return symbols
-
-    def get_all_symbols(self) -> list:
-        return mt5.symbols.get()
 
     def get_live_data(self, symbol, timeframe , bars=1000) -> pd.DataFrame:
         """
@@ -187,7 +185,7 @@ class MetaTrader5Client:
         key = (symbol, tf_name)
         now = datetime.now(datetime.timezone.utc)
 
-        with self._tf_lock:
+        with self.lock:
             last_fetch = self._tf_last_fetch.get(key)
 
             if last_fetch is None:
@@ -251,81 +249,3 @@ class MetaTrader5Client:
         mt5.shutdown()
         logger.info("🔌 Disconnected from MetaTrader 5.")
         return False
-
-
-class DataPlotter:
-
-    @staticmethod
-    def plot_ticks(ticks, title):
-        if ticks is None or len(ticks) == 0:
-            logger.info("No data to plot.")
-            return
-        ticks_frame = pd.DataFrame(ticks)
-        ticks_frame['time'] = pd.to_datetime(ticks_frame['time'], unit='s')
-        plt.plot(ticks_frame['time'], ticks_frame['ask'], 'r-', label='ask')
-        plt.plot(ticks_frame['time'], ticks_frame['bid'], 'b-', label='bid')
-        plt.legend(loc='upper left')
-        plt.title(title)
-        plt.show()
-
-    @staticmethod
-    def plot_rates(rates, title):
-        if rates is None or len(rates) == 0:
-            logger.info("No data to plot.")
-            return
-        rates_frame = pd.DataFrame(rates)
-        rates_frame['time'] = pd.to_datetime(rates_frame['time'], unit='s')
-        plt.plot(rates_frame['time'], rates_frame['close'], label='close')
-        plt.title(title)
-        plt.legend()
-        plt.show()
-
-    @staticmethod
-    def plot_charts(rates, fast_period, slow_period):
-        if rates is None:
-            raise ValueError(
-                "Error: `self.results` is None. Run `backtest_strategy()` before plotting.")
-
-        if 'Crossover' not in rates.columns:
-            raise ValueError(
-                "Error: 'Crossover' column is missing in `self.results`. Check data processing.")
-
-        if 'close' not in rates.columns or rates['close'].empty:
-            raise ValueError("No Close data available")
-
-        plt.figure(figsize=(12, 6))
-
-        # Plot the close price
-        plt.plot(rates.index, rates['close'], label="Close", color='black')
-
-        # Plot the fast and slow moving averages
-        plt.plot(rates.index, rates['Fast_MA'],
-                 label=f"Fast MA ({fast_period})", color='blue')
-        plt.plot(rates.index, rates['Slow_MA'],
-                 label=f"Slow MA ({slow_period})", color='red')
-
-        # Plot buy/sell signals
-        buy_signals = rates.loc[rates['Entry'] == "Buy"]
-        sell_signals = rates.loc[rates['Entry'] == "Sell"]
-
-        plt.plot(buy_signals.index, buy_signals['Fast_MA'], '^',
-                 color='green', markersize=12, label="Buy Signal")
-        plt.plot(sell_signals.index, sell_signals['Fast_MA'],
-                 'v', color='red', markersize=12, label="Sell Signal")
-
-        # Plot SL/TP levels
-        for i in buy_signals.index:
-            plt.hlines(rates.loc[i, 'SL'], i, i + 5, colors='red',
-                       linestyles='dashed', label="SL" if i == buy_signals.index[0] else "")
-            plt.hlines(rates.loc[i, 'TP'], i, i + 5, colors='green',
-                       linestyles='dashed', label="TP" if i == buy_signals.index[0] else "")
-
-        for i in sell_signals.index:
-            plt.hlines(rates.loc[i, 'SL'], i, i + 5,
-                       colors='red', linestyles='dashed')
-            plt.hlines(rates.loc[i, 'TP'], i, i + 5,
-                       colors='green', linestyles='dashed')
-
-        plt.title('Moving Average Crossover Signals with SL/TP')
-        plt.legend(loc='upper left')
-        plt.show()
