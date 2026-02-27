@@ -33,10 +33,10 @@ class TestMovingAverages(unittest.TestCase):
 
     def setUp(self):
         """Create a fresh MovingAverageCrossover instance for each test"""
-        self.strategy = MovingAverageCrossover(self.symbol, self.data)
+        self.strategy = MovingAverageCrossover(self.symbol, self.data_handler.data)
 
     def test_calculate_averages(self):
-        averages_data = self.strategy.calculate_moving_averages_data(self.data)
+        averages_data = self.strategy.calculate_moving_averages_data(self.data_handler.data)
 
         self.assertIsNotNone(averages_data, "Averages data should not be None")
         self.assertIsInstance(averages_data, pd.DataFrame)
@@ -49,7 +49,7 @@ class TestMovingAverages(unittest.TestCase):
         self.assertTrue(expected_columns.issubset(averages_data.columns))
 
     # def test_backtest(self):
-    #     _ = self.strategy.calculate_moving_averages_data(self.data)
+    #     _ = self.strategy.calculate_moving_averages_data(self.data_handler.data)
     #     backtested_data = self.strategy.backtest_strategy()
 
     #     self.assertIsNotNone(backtested_data, "Backtest data should not be None")
@@ -68,7 +68,7 @@ class TestMovingAverages(unittest.TestCase):
 
     # def test_strategy_runs_end_to_end(self):
     #     """Full run test: calculate averages + backtest"""
-    #     averages_data = self.strategy.calculate_moving_averages_data(self.data)
+    #     averages_data = self.strategy.calculate_moving_averages_data(self.data_handler.data)
     #     backtested_data = self.strategy.backtest_strategy()
 
     #     self.assertIsNotNone(averages_data)

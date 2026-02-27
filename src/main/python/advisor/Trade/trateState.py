@@ -16,6 +16,9 @@ class TradeStateManager:
             "open_time": dt.datetime.now(dt.datetime.timezone.utc)
         }
 
+    def get_active_trades(self):
+        return self.active.values()
+
     def sync_closed(self):
 
         utc_from = dt.datetime.now(dt.datetime.timezone.utc) - dt.timedelta(days=5)

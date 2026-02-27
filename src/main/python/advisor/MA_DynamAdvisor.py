@@ -2,406 +2,214 @@
 # MA_DynamAdvisor Bot Main Module
 # -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import asyncio
-import os
-import sys
-import time
-import datetime
-import threading
-import queue
 import logging
+import os
 import signal
+import sys
+from threading import Event
 
-from advisor.utils.ThreadHandler import ThreadHandler
-from advisor.utils import dataHandler as utils
-from advisor.utils.cache import CacheManager as cache
+from advisor.Client.mt5Client import MetaTrader5Client
+from advisor.scheduler.resource_registry import ResourceRegistry
+from process.process_engine import Supervisor
+from scheduler.process_sceduler import ProcessScheduler
+from advisor.core.state import StateManager, BotState
+from advisor.core.health_bus import HealthBus
+from advisor.indicators.signal_store import SignalStore
+from Trade.trateState import TradeStateManager
+from advisor.process.heartbeats import HeartbeatRegistry
 
-from advisor.mt5_pipeline.Client import mt5Client
-from advisor.indicators.MovingAverage import MovingAverage as MA
-from Trade import tradeHandler as algorithim
-from advisor.GUI import userInput as gui
-from advisor.Telegram.runner import run as TelegramRunner
+from advisor.backtest.engine import backtestProcess as backtest_process
+from advisor.mt5_pipeline.runner import pipelineProcess as pipeline_process
+from advisor.indicators.strategy import strategyManager as strategy_process
+from Trade.trade_engine import ExecutionProcess
+from advisor.utils.config_handler import UserConfig
+from advisor.GUI.userInput import UserGUI as setUpWizard
+from utils.dataHandler import CacheManager
 
 
-# -------------------------
-# Logging Configuration
-# -------------------------
+# ============================================================
+# LOGGING
+# ============================================================
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
+    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
     handlers=[
-        logging.FileHandler("MA_DynamAdvisor.log", encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
+        logging.FileHandler("advisor_engine.log", encoding="utf-8"),
+        logging.StreamHandler(sys.stdout)
+    ]
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("MAIN")
 
+# ============================================================
+# APPLICATION BOOTSTRAP
+# ============================================================
 
-class RunAdvisorBot:
-    """Main Advisor Bot Orchestrator (integrated with ThreadHandler)"""
-
-    SLEEP_INTERVAL = 15 * 60  # 15 minutes (configurable)
-    RETRY_DELAY = 10  # Delay before retry on data fetch errors
+class Main:
 
     def __init__(self):
-        # Initialize GUI
-        self.next_cycle = datetime.datetime().now().date()
-        self.backtest_cycle = True
-        self.gui = gui.UserGUI()
-        self.gui.set_stop_callback(self.stop_bot)
+        self.shutdown_event = Event()
 
-        self.stop_callback = None
-        self.symbol_queue = queue.Queue()  # kept for compatibility but not required now
-        self.stop_event = threading.Event()   # global stop
-        self.paused_event = threading.Event()
-        self.init = False
-        # Thread handler
-        self.thread_handler = ThreadHandler(logger=logger.info)
-        self.cache = cache()
-        self.data_handler = None
+        self._init_core_components()
+        self._init_broker()
+        self._init_core_instance_()
 
-        # Initialize MT5 client
-        self.client = mt5Client.MetaTrader5Client()
-        self.symbols = self.client.symbols
-        # Start Telegram runner as managed thread
-        self.thread_handler.start_thread(
-            name="telegram_runner",
-            group="system",
-            ttype="telegram",
-            target=self._telegram_runner_wrapper,
-            args=(),
-            auto_restart=True,
-            max_restarts=3,
-            callbacks={
-                "on_start": lambda t: logger.info("📨 Telegram runner started."),
-                "on_stop": lambda t: logger.info("📨 Telegram runner stopped."),
-                "on_error": lambda t: logger.warning("📨 Telegram runner crashed."),
-            },
+        self._register_signal_handlers()
+
+    # ------------------------------------------------------------
+    # INITIALIZATION
+    # ------------------------------------------------------------
+
+    def _init_core_components(self):
+
+        logger.info("Initializing core components...")
+
+        self.state_manager = StateManager()
+        self.scheduler = ProcessScheduler()
+        self.heartbeats = HeartbeatRegistry()
+        self.signal_store = SignalStore()
+        self.trade_state = TradeStateManager()
+        self.cache_handler = CacheManager()
+        self.orch = Supervisor(self.state_manager, self.heartbeats)
+        self.botState = self.state_manager.load_bot_state()
+
+        logger.info("Core components initialized.")
+
+    def _init_broker(self, user_data):
+
+        logger.info("Connecting to broker...")
+
+        self.client = MetaTrader5Client()
+
+        if not self.client.initialize(user_data):
+            logger.critical("Broker initialization failed.")
+            sys.exit(1)
+
+        logger.info("Broker connection established.")
+
+    def _init_core_instance_(self):
+
+        logger.info("Initializing risk engine...")
+
+        self._executor = ExecutionProcess(
+            client=self.client,
+            signal_store=self.signal_store,
+            state=self.trade_state,
+            state_manager=self.state_manager,
+            health_bus=self.orch.health_bus,
+            heartbeats=self.orch.heartbeats,
+            registry=self.orch.registry,
+            max_daily_loss_pct=0.05,
+            max_total_dd_pct=0.15,
+            max_trades_per_hour=10,
+            max_symbol_exposure=2,
+            max_consecutive_losses=5,
+        )
+        self.pipeline = pipeline_process(
+            self.client,
+            self.cache_handler,
+            self.orch.shutdown,
+            self.orch.heartbeats,
+            self.orch.health_bus,
+            self.orch.registry,
+            self.scheduler,
+            self.state_manager,
+        )
+        self.backtest = backtest_process(
+            self.client,
+            self.cache_handler,
+            self.orch.registry,
+            self.orch.health_bus,
+            self.orch.heartbeats,
+            self.orch.shutdown,
+            self.botState,
+            self.state_manager,
+            self.scheduler
+        )
+        self.strategy = strategy_process(
+            self.client,
+            self.orch.shutdown,
+            self.orch.heartbeats,
+            self.orch.health_bus,
+            self.orch.registry,
+            self.scheduler,
+            self.signal_store,
+            self.state_manager,
         )
 
-        # Ensure GUI close event calls our on_close.
-        self.gui.root.wm_protocol("WM_DELETE_WINDOW", self.on_close)
+        self.register_processes()
 
-    # -------------------------------------------------------------------------
-    # Telegram wrapper (for ManagedThread)
-    # -------------------------------------------------------------------------
-    def _telegram_runner_wrapper(self, stop_event, pause_event):
-        """Run the async Telegram runner. Exits when runner exits or stop_event set."""
+    def register_processes(self):
+        self.orch.register_process(name="pipeline", target=self.pipeline.start, *(), depends=[])
+        self.orch.register_process(name="backtest", target=self.backtest.start, *(), depends=["pipeline"])
+        self.orch.register_process(name="strategy", target=self.strategy.start, *(), depends=["pipeline", "backtest"])
+        self.orch.register_process(name="execution", target=self._executor.start, *(), depends=["strategy"])
+
+        logger.info("engines ready.")
+
+    # ------------------------------------------------------------
+    # STARTUP
+    # ------------------------------------------------------------
+
+    def start(self):
+
         try:
-            # Run the Telegram coroutine until it completes or stop_event is set.
-            asyncio.run(TelegramRunner())
-        except Exception as e:
-            logger.exception(f"Telegram runner error in main: {e}")
-            # let ManagedThread handle restarts if enabled
+            logger.info("Reconciling open broker positions...")
+            self._restore_open_positions()
 
-    # -------------------------
-    # Bot Control
-    # -------------------------
-    def set_stop_callback(self, callback):
-        """Set a callback function to be called on bot stop."""
-        self.stop_callback = callback
+            logger.info("Application starting...")
+            self.state_manager.set_state(BotState.state.RUNNING)
 
-    def _stop_gui(self):
-        """Safely stop GUI loop if running."""
-        try:
-            if getattr(self.gui, "root", None):
-                try:
-                    self.gui.should_run = False
-                    try:
-                        self.gui.root.destroy()
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
-        except Exception as e:
-            logger.debug(f"⚠ GUI stop issue: {e}")
-
-    def _close_client(self):
-        """Safely close MT5 client."""
-        try:
-            if getattr(self.client, "close", None):
-                self.client.close()
-                logger.info("📴 MT5 connection closed.")
-        except Exception as e:
-            logger.warning(f"⚠ Error closing MT5: {e}")
-
-    def _call_stop_callback(self):
-        """Call external stop callback."""
-        try:
-            if self.stop_callback:
-                logger.info("🧩 Running external stop callback...")
-                self.stop_callback()
-        except Exception as e:
-            logger.warning(f"⚠ stop_callback raised: {e}")
-
-    def stop_bot(self):
-        """Cleanly stop all threads and MT5 session."""
-        if self.stop_event.is_set():
-            logger.info("✅ stop_bot called but stop_event already set.")
-            return
-
-        logger.info("🛑 Stopping Advisor Bot...")
-        self.stop_event.set()
-
-        # Stop managed threads
-        try:
-            self.thread_handler.stop_all()
-            # Also stop any threads using the legacy symbol_queue approach (if used)
-        except Exception as e:
-            logger.warning(f"⚠ Error stopping thread handler: {e}")
-
-        # Wait for threads to finish gracefully (short timeout)
-        try:
-            self.thread_handler.wait_for_all(timeout=10)
-        except Exception as e:
-            logger.warning(f"⚠ Error waiting for threads: {e}")
-        finally:
-            self._close_client()
-            self._call_stop_callback()
-            self._stop_gui()
-            logger.info("✅ Bot stop sequence completed.")
-
-    def on_close(self):
-        """Triggered when the GUI window is closed."""
-        logger.info("❌ Closing GUI and stopping bot...")
-        try:
-            self.client.close()
-        except Exception:
-            pass
-        finally:
-            self.stop_bot()
-
-    # -------------------------
-    # Worker Helpers
-    # -------------------------
-    def _wait_if_paused(self, symbol):
-        """Pause handling logic (keeps original GUI pause semantics)."""
-        if gui.LogWindow.paused:
-            logger.info(f"⏸ {symbol}: Bot paused. Waiting...")
-            while gui.LogWindow.paused and self.gui.should_run and not self.stop_event.is_set():
-                time.sleep(2)
-            if not self.gui.should_run or self.stop_event.is_set():
-                logger.info(f"🛑 {symbol}: Bot stopped during pause.")
-                raise SystemExit
-            logger.info(f"▶ {symbol}: Bot resumed.")
-
-    # need to be reconfigured
-    def _get_symbol_data(self, symbol) -> bool:
-        """Fetch multi-timeframe data for the given symbol."""
-        try:
-            res = {}
-            if getattr(self.client.cache, "memory", not {}):
-                res = self.data_handler.set_data(self.cache.get(symbol))
-            else:
-                res = self.client.get_multi_tf_data(symbol, self.data_handler)
-            if not isinstance(self.data_handler.data, dict) or len(self.data_handler.data) == 0:
-                logger.warning(f"⚠️ Invalid multi-timeframe data received for {symbol}")
-                return res
-
-            # Ensure all values are proper DataFrames
-            for tf, df in self.data_handler.data.items():
-                if df is None or getattr(df, "empty", True):
-                    logger.warning(f"⚠️ Missing/empty data for {symbol} @ {tf}")
-                    return res
-
-            return res
+            self.orch.start()
 
         except Exception as e:
-            logger.error(f"❌ Error fetching data for {symbol}: {e}")
-            return False
+            logger.critical(f"Fatal startup error: {e}", exc_info=True)
+            self.state_manager.set_state(BotState.state.DEGRADED)
+            sys.exit(1)
 
-    def _calculate_indicators(self, symbol) -> bool:
-        import pandas as pd
-        """Calculate MA indicators for every timeframe in the dict."""
+    # ------------------------------------------------------------
+    # CRASH RECOVERY
+    # ------------------------------------------------------------
+
+    def _restore_open_positions(self):
+
+        open_positions = self.client.get_open_positions()
+
+        for pos in open_positions:
+            self.trade_state.register_open(pos)
+
+        logger.info(f"Restored {len(open_positions)} open positions.")
+
+    # ------------------------------------------------------------
+    # SHUTDOWN
+    # ------------------------------------------------------------
+
+    def shutdown(self, *args):
+
+        logger.warning("Shutdown signal received.")
+
+        self.shutdown_event.set()
+
         try:
-            processed = {}
-            strategy = MA.MovingAverageCrossover(symbol, caching=self.client.cache, data_handler=self.data_handler)
-
-            # Calculate MA for ALL timeframes
-            res = strategy.calculate_moving_averages_data(self.gui.user_data["sl"])
-
-            if not self.data_handler.data.get("Bias"):
-                logger.error("Main Trend missing or empty in data dict")
-
-            # Validate every timeframe has MA columns
-            if res:
-                for tf, df in self.data_handler.data.items():
-                    if tf == "Main_Trend":
-                        continue
-                    if df is None or not isinstance(df, pd.DataFrame):
-                        logger.error(f"❌ Missing data after MA calc for {symbol} @ {tf}")
-                        return res
-
-                    if not all(col in df.columns for col in ["Fast_MA", "Slow_MA"]):
-                        logger.error(f"❌ Missing MA columns for {symbol} @ {tf}")
-                        return res
-
-                    processed[tf] = df
-                    self.data_handler.update(tf, df)
-                return res
-            return res
-
-        except Exception as e:
-            logger.exception(f"❌ Error calculating indicators for {symbol}: {e}")
-            return False
-
-    def _analyze_and_trade(self, symbol, data_dict):
-        """Use lowest TF for entries and highest TF for bias."""
-        # Execute trade
-        self.trade.run_trades(
-            THRESHOLD=self.client.THRESHOLD,
-            symbol=symbol,
-        )
-
-    def _sleep_with_stop_check(self, duration):
-        """Sleep while periodically checking if stop_event is set. Returns True if full sleep completed."""
-        return not self.stop_event.wait(timeout=duration)
-
-    # -------------------------
-    # Per-symbol thread wrapper (for ManagedThread)
-    # -------------------------
-    def _process_symbol_thread(self, symbol, stop_event, pause_event):
-        """
-        This wrapper runs the original _process_symbol logic but accepts
-        the managed stop_event and pause_event so threads can be individually controlled.
-        It will honor either the global self.stop_event or the per-thread stop_event.
-        """
-        try:
-            # Create the trading algorithm instance
-            self.data_handler = utils.dataHandler()
-            self.trade = algorithim.MT5TradingAlgorithm(symbol, self.thread_handler.get_by_name("telegram_runner"), self.gui.user_data)
-
-            # Keep running while initialization flag is set and neither global nor local stop requested
-            while getattr(self, "init", False) and not (self.stop_event.is_set() or stop_event.is_set()):
-                # First respect GUI-level pause, then per-thread pause_event.
-                self._wait_if_paused(symbol)
-
-                # Also allow the pause_event to block
-                pause_event.wait()
-                if (self.stop_event.is_set() or stop_event.is_set()):
-                    break
-
-                res = self._get_symbol_data(symbol)
-                if res:
-                    # Wait but allow exit if any stop event set
-                    logger.warning("data dict is empty")
-                    if self.stop_event.wait(timeout=self.RETRY_DELAY) or stop_event.wait(timeout=0):
-                        break
-                    continue
-
-                # calculate indicators
-                processed = self._calculate_indicators(symbol)
-                if processed:
-                    if self.stop_event.wait(timeout=self.RETRY_DELAY):
-                        break
-                    continue
-
-                self._analyze_and_trade(symbol, self.data_handler.data)
-                logger.info(f"🛌 Next {symbol} cycle in {self.SLEEP_INTERVAL // 60} minutes...")
-                if not self._sleep_with_stop_check(self.SLEEP_INTERVAL):
-                    break
-
-        except SystemExit:
-            logger.warning(f"🧵 {symbol}: SystemExit received, ending worker loop.")
-        except Exception as e:
-            logger.exception(f"❌ Error processing symbol {symbol}: {e}")
-
-    # -------------------------
-    # MT5 initialize + start managed worker threads
-    # -------------------------
-    def _mt5_initialize(self):
-        """Initialize MT5 connection and populate the symbols list. Returns True on success."""
-        logger.info("🔄 Initializing MetaTrader5 connection...")
-        try:
-            if not self.client.logIn(self.gui.user_data):
-                raise ConnectionError("Failed to initialize MetaTrader5. Check credentials or network.")
-            return True
-
-        except Exception as e:
-            logger.exception(f"❌ MT5 initialization failed: {e}")
-            try:
-                self.gui.pop_up_error(f"MetaTrader5 initialization failed: {e}")
-            except Exception:
-                pass
-            try:
-                self.client.close()
-            except Exception:
-                pass
-            self.stop_event.set()
-            return False
-
-    def _start_managed_workers(self):
-        """Create a managed thread per symbol via ThreadHandler."""
-        self.init = True
-        logger.info("🏃‍♂️ Starting managed worker threads...")
-
-        for sym in self.symbols:
-            name = f"worker_{sym}"
-            self.thread_handler.start_thread(
-                name=name,
-                group="symbol",
-                ttype="worker",
-                target=self._process_symbol_thread,
-                args=(sym,),
-                auto_restart=True,   # you can toggle per-symbol auto-restart
-                max_restarts=2,
-                callbacks={
-                    "on_start": lambda t, s=sym: logger.info(f"✅ Worker for {s} started."),
-                    "on_stop": lambda t, s=sym: logger.info(f"🧵 Worker for {s} stopped."),
-                    "on_error": lambda t, s=sym: logger.warning(f"❌ Worker for {s} crashed."),
-                },
-            )
-            time.sleep(0.2)
-
-    def _wait_for_managed_workers(self):
-        """Wait for managed threads to finish (until global stop_event)."""
-        try:
-            # Block until all worker threads are no longer alive or global stop_event
-            while any(t.thread.is_alive() and t.type == "worker" for t in self.thread_handler.threads.values()) and not self.stop_event.is_set():
-                time.sleep(1)
-        except KeyboardInterrupt:
-            logger.info("🟥 KeyboardInterrupt received, stopping workers.")
-            self.stop_event.set()
-
-        logger.info("✅ All managed worker threads completed.")
-        try:
-            self.client.close()
+            self.client.shutdown()
         except Exception:
             pass
 
-    # -------------------------
-    # Main Bot Logic
-    # -------------------------
-    def start_bot_logic(self):
-        """Top-level bot start that delegates to smaller helpers."""
-        try:
-            if not self._mt5_initialize():
-                raise ConnectionError("failed mt5 connection")
+        self.state_manager.set_state(BotState.state.STOPPED)
 
-            self.run_backtest()
-            # start bot logic with backtested symbols
-            self._start_managed_workers()
-            self._wait_for_managed_workers()
-        except Exception as e:
-            logger.exception(f'Bot raised Exception: {e}')
-        except ConnectionError as e:
-            logger.warning(f'mt5 connection failed: {e}')
-            self.stop_bot()
+        logger.info("System shutdown complete.")
+        sys.exit(0)
 
-    # -------------------------
-    # GUI Event Loop
-    # -------------------------
-    def run(self):
-        """Entry point for running the bot with GUI monitoring."""
-        def start_when_ready():
-            if self.gui.should_run:
-                logger.info("🟢 Running bot...")
-                threading.Thread(target=self.start_bot_logic, daemon=True).start()
-            else:
-                self.gui.root.after(1000, start_when_ready)
+    # ------------------------------------------------------------
+    # SIGNAL HANDLERS
+    # ------------------------------------------------------------
 
-        start_when_ready()
-        self.gui.root.mainloop()
+    def _register_signal_handlers(self):
+
+        signal.signal(signal.SIGINT, self.shutdown)
+        signal.signal(signal.SIGTERM, self.shutdown)
+
 
 # -------------------------
 # Single Instance Guard
@@ -414,6 +222,22 @@ def ensure_single_instance(lock_file):
     with open(lock_file, "w") as f:
         f.write(str(os.getpid()))
     return True
+
+def load_configs(self):
+    from advisor.bootstrap.sys_bootstrap import SystemBootstrap
+    from advisor.Client.mt5Client import MetaTrader5Client
+
+    bootstrap = SystemBootstrap(MetaTrader5Client)
+
+    try:
+        system_objects = bootstrap.initialize()
+    except Exception as e:
+        print(f"Bootstrap failed: {e}")
+        sys.exit(1)
+
+    client = system_objects["client"]
+    config = system_objects["config"]
+    state = system_objects["state"]
 
 
 if __name__ == "__main__":
@@ -432,8 +256,8 @@ if __name__ == "__main__":
             logger.info("⚠️ Please close the running instance before starting a new one.")
             sys.exit(1)
 
-        bot = RunAdvisorBot()
-        bot.run()
+        bot = Main()
+        bot.start()
 
     except KeyboardInterrupt:
         logger.info("🟥 Bot stopped manually.")
