@@ -1,6 +1,6 @@
 from enum import Enum
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 
 class ResourceState(Enum):
@@ -19,4 +19,4 @@ class ResourceStatus:
     def is_fresh(self, max_age: timedelta):
         if not self.last_updated:
             return False
-        return datetime.now(datetime.timezone.utc) - self.last_updated <= max_age
+        return datetime.now(timezone.utc) - self.last_updated <= max_age

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from multiprocessing.managers import SyncManager
 from .resources import ResourceStatus, ResourceState
 
@@ -14,13 +14,13 @@ class ResourceRegistry:
     def set_ready(self, name: str):
         self._resources[name] = ResourceStatus(
             ResourceState.READY,
-            datetime.now(datetime.timezone.utc)
+            datetime.now(timezone.utc)
         )
 
     def set_state(self, name: str, state: ResourceState):
         self._resources[name] = ResourceStatus(
             state,
-            datetime.now(datetime.timezone.utc)
+            datetime.now(timezone.utc)
         )
 
     def get(self, name: str) -> ResourceStatus | None:

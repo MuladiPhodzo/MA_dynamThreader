@@ -1,10 +1,10 @@
 from advisor.MA_DynamAdvisor import Main
 
 
-def run():
-    app = Main()
-    app.start()
+def main():
+    bot = Main()
+    bot.start()
 
 
 if __name__ == "__main__":
-    run()
+    main()

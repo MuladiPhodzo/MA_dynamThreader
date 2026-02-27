@@ -5,11 +5,12 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
+from multiprocessing import Manager
 from multiprocessing.managers import SyncManager
 from pathlib import Path
 from typing import Dict, Optional
 
-from core.locks import STATE_LOCK
+from advisor.core.locks import STATE_LOCK
 
 
 # =========================================================
@@ -57,7 +58,7 @@ class BotState:
 
     backtest_running: bool = False
     live_trading_enabled: bool = True
-    state: BotLifecycle = BotLifecycle.STOPPED.value
+    state: BotLifecycle = BotLifecycle.STOPPED
 
 
 # =========================================================
@@ -65,8 +66,11 @@ class BotState:
 # =========================================================
 
 class StateManager:
-    def __init__(self, manager: SyncManager):
+    def __init__(self, manager: SyncManager | None = None):
         # Runtime lifecycle state (NOT persisted here)
+        if manager is None:
+            manager = Manager()
+        self._manager = manager
         self._lifecycle = manager.Value("i", BotLifecycle.STARTING.value)
         self.bot = self.load_bot_state()
         self.bot.state = self.get_state()
@@ -79,6 +83,14 @@ class StateManager:
 
     def get_state(self) -> BotLifecycle:
         return BotLifecycle(self._lifecycle.value)
+
+    @property
+    def last_backtest_run(self) -> Optional[datetime]:
+        return self.bot.last_backtest_run
+
+    @last_backtest_run.setter
+    def last_backtest_run(self, value: Optional[datetime]) -> None:
+        self.bot.last_backtest_run = value
 
     # -----------------------------------------------------
     # Datetime Helpers

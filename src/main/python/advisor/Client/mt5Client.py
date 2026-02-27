@@ -183,9 +183,9 @@ class MetaTrader5Client:
         interval = self.TF_dict[tf_name]["interval_minutes"]
 
         key = (symbol, tf_name)
-        now = datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.timezone.utc)
 
-        with self.lock:
+        with self._symbol_lock:
             last_fetch = self._tf_last_fetch.get(key)
 
             if last_fetch is None:
@@ -197,6 +197,12 @@ class MetaTrader5Client:
                 return True
 
         return False
+
+    def get_equity(self) -> float:
+        info = mt5.account_info()
+        if info is None:
+            return 0.0
+        return float(info.equity)
 
     def get_multi_tf_data(self, symbol) -> dict[str, pd.DataFrame] | None:
         """

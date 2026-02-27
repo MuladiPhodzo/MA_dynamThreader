@@ -1,5 +1,5 @@
 from multiprocessing.managers import SyncManager
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class HealthBus:
@@ -11,7 +11,7 @@ class HealthBus:
         self.data[proc_name] = {
             "status": status,
             "meta": meta or {},
-            "timestamp": datetime.now(datetime.timezone.utc).isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
     def snapshot(self):

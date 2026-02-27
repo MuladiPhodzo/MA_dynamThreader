@@ -1,76 +1,73 @@
+import asyncio
 import logging
-import time
-from datetime import timedelta, datetime
 import sys
-from typing import Any, Callable, Optional, List
+from datetime import datetime, timezone
+from typing import Any, Awaitable, Callable, Optional
+
+from .requirements import ProcessRequirement
 from .readiness_gate import ReadinessGate
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(astime)s [%(levename)s] %(message)s",
+    format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
         logging.FileHandler("MA_DynamAdvisor.log", encoding="utf-8"),
         logging.StreamHandler(sys.stdout),
-    ]
+    ],
 )
 
 logger = logging.getLogger("Process_Scheduler")
 
-class ProcessScheduler:
 
-    def __init__(self, registry):
+class ProcessScheduler:
+    def __init__(self, registry=None):
         self.registry = registry
         self.gate = ReadinessGate(registry)
 
-    def schedule(
+    async def schedule(
         self,
         process_name: str,
-        required_resources: List[str],
-        task: Callable[[], Any],
+        required_resources: list[ProcessRequirement | str],
+        task: Callable[[], Any] | Callable[[], Awaitable[Any]],
         shutdown_event,
         heartbeats: dict,
         timeout: Optional[int] = None,
-        poll_interval: float = 0.5,
     ) -> Optional[Any]:
-        """
-        Blocks execution until all required resources are ready,
-        then executes the task safely.
-        """
+        heartbeats[process_name] = datetime.now(timezone.utc).isoformat()
 
-        start = datetime.now(datetime.timezone.utc)
-
-        # ---------------------------
-        # WAIT FOR RESOURCES
-        # ---------------------------
-        while not shutdown_event.is_set():
-
-            # heartbeat while waiting
-            heartbeats[process_name] = datetime.now(datetime.timezone.utc).isoformat()
-
-            if self._resources_ready(required_resources):
-                break
-
-            if timeout and datetime.now(datetime.timezone.utc) - start > timedelta(seconds=timeout):
+        requirements = self._normalize_requirements(required_resources)
+        if requirements:
+            try:
+                await asyncio.to_thread(self.gate.wait_for, requirements, timeout or 60)
+            except TimeoutError:
                 logger.error(
-                    f"[{process_name}] Scheduler timeout waiting for {required_resources}"
+                    "[%s] Scheduler timeout waiting for %s",
+                    process_name,
+                    [r.resource for r in requirements],
                 )
                 return None
 
-            time.sleep(poll_interval)
-
         if shutdown_event.is_set():
-            logger.info(f"[{process_name}] Shutdown before execution")
+            logger.info("[%s] Shutdown before execution", process_name)
             return None
 
-        # ---------------------------
-        # EXECUTE TASK
-        # ---------------------------
         try:
-            logger.info(
-                f"[{process_name}] Running task (resources ready: {required_resources})"
-            )
-            return task()
-
+            result = task()
+            if asyncio.iscoroutine(result):
+                return await result
+            return result
         except Exception:
-            logger.exception(f"[{process_name}] Task execution failed")
+            logger.exception("[%s] Task execution failed", process_name)
             raise
+
+    @staticmethod
+    def _normalize_requirements(
+        required_resources: list[ProcessRequirement | str],
+    ) -> list[ProcessRequirement]:
+        normalized: list[ProcessRequirement] = []
+        for item in required_resources:
+            if isinstance(item, ProcessRequirement):
+                normalized.append(item)
+            else:
+                normalized.append(ProcessRequirement(resource=item))
+        return normalized
