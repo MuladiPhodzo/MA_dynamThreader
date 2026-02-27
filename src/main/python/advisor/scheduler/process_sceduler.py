@@ -1,7 +1,6 @@
-from multiprocessing import Event
 import logging
 import time
-import timedelta, datetime
+from datetime import timedelta, datetime
 import sys
 from typing import Any, Callable, Optional, List
 from .readiness_gate import ReadinessGate
@@ -28,7 +27,7 @@ class ProcessScheduler:
         process_name: str,
         required_resources: List[str],
         task: Callable[[], Any],
-        shutdown_event: Event,
+        shutdown_event,
         heartbeats: dict,
         timeout: Optional[int] = None,
         poll_interval: float = 0.5,

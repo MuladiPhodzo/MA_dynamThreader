@@ -1,130 +1,192 @@
 # core/state.py
-from multiprocessing.managers import SyncManager
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from typing import Dict
-# core/state.py
 
 import json
+import logging
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from enum import Enum
+from multiprocessing.managers import SyncManager
 from pathlib import Path
+from typing import Dict, Optional
+
 from core.locks import STATE_LOCK
 
+
+# =========================================================
+# CONSTANTS
+# =========================================================
+
 STATE_FILE = Path("bot_state.json")
+
+
+# =========================================================
+# ENUM (STABLE — NOT DYNAMIC)
+# =========================================================
+
+class BotLifecycle(Enum):
+    STARTING = 1
+    RUNNING = 2
+    RUNNING_BACKTEST = 3
+    IDLE = 4
+    DEGRADED = 5
+    RECOVERING = 6
+    STOPPING = 7
+    STOPPED = 8
+
+
+# =========================================================
+# DATA STRUCTURES
+# =========================================================
 
 @dataclass
 class SymbolState:
     symbol: str
     score: float = 0.0
-    last_backtest: datetime | None = None
+    last_backtest: Optional[datetime] = None
     enabled: bool = False
+
 
 @dataclass
 class BotState:
     version: str = "1.0"
-    last_backtest_run: datetime | None = None
-    next_backtest_run: datetime | None = None
+
+    last_backtest_run: Optional[datetime] = None
+    next_backtest_run: Optional[datetime] = None
+
     symbols: Dict[str, SymbolState] = field(default_factory=dict)
 
     backtest_running: bool = False
     live_trading_enabled: bool = True
+    state: BotLifecycle = BotLifecycle.STOPPED.value
 
-    state = Enum("state", ["STARTING", "RUNNING", "RUNNING_BACKTEST", "IDLE", "DEGRADED", "RECOVERING", "STOPPING", "STOPPED"])
+
+# =========================================================
+# STATE MANAGER
+# =========================================================
+
 class StateManager:
     def __init__(self, manager: SyncManager):
-        self._state = manager.Value("state", BotState.state.STARTING.value)
+        # Runtime lifecycle state (NOT persisted here)
+        self._lifecycle = manager.Value("i", BotLifecycle.STARTING.value)
+        self.bot = self.load_bot_state()
+        self.bot.state = self.get_state()
+    # -----------------------------------------------------
+    # Lifecycle State (Runtime Only)
+    # -----------------------------------------------------
+
+    def set_state(self, state: BotLifecycle):
+        self._lifecycle.value = state.value
+
+    def get_state(self) -> BotLifecycle:
+        return BotLifecycle(self._lifecycle.value)
+
+    # -----------------------------------------------------
+    # Datetime Helpers
+    # -----------------------------------------------------
 
     @staticmethod
-    def _dt(d):
-        return d.isoformat() if d else None
+    def _serialize_dt(dt: Optional[datetime]):
+        return dt.isoformat() if dt else None
 
     @staticmethod
-    def _parse_dt(d):
-        return datetime.fromisoformat(d) if d else None
+    def _parse_dt(value: Optional[str]):
+        if not value:
+            return None
+        return datetime.fromisoformat(value)
+
+    # -----------------------------------------------------
+    # LOAD BOT STATE
+    # -----------------------------------------------------
 
     @staticmethod
-    def loadBotState() -> BotState:
+    def load_bot_state() -> BotState:
+
         with STATE_LOCK:
             if not STATE_FILE.exists():
+                logging.warning("State file not found. Creating fresh state.")
                 return BotState()
 
-            with open(STATE_FILE, "r") as f:
-                raw: dict = json.load(f)
+            try:
+                with open(STATE_FILE, "r") as f:
+                    raw = json.load(f)
 
-            return BotState(
-                version=raw["version"],
-                last_backtest_run=StateManager._parse_dt(raw.get("last_backtest_run"), datetime.now()),
-                next_backtest_run=StateManager._parse_dt(raw.get("next_backtest_run"), datetime.now() + timedelta(days=90)),
-                symbols={
+                symbols = {
                     k: SymbolState(
                         symbol=k,
-                        score=v["score"],
-                        last_backtest=StateManager._parse_dt(v["last_backtest"]),
-                        enabled=v["enabled"]
+                        score=v.get("score", 0.0),
+                        last_backtest=StateManager._parse_dt(v.get("last_backtest")),
+                        enabled=v.get("enabled", False)
                     )
-                    for k, v in raw["symbols"].items()
-                },
-                backtest_running=raw["backtest_running"],
-                live_trading_enabled=raw["live_trading_enabled"],
-            )
+                    for k, v in raw.get("symbols", {}).items()
+                }
 
-    def set_state(self, state: BotState.state):
-        BotState.backtest_running = True if not BotState.backtest_running else False
-        self._state.value = state.value
+                return BotState(
+                    version=raw.get("version", "1.0"),
+                    last_backtest_run=StateManager._parse_dt(raw.get("last_backtest_run")),
+                    next_backtest_run=StateManager._parse_dt(raw.get("next_backtest_run")),
+                    symbols=symbols,
+                    backtest_running=raw.get("backtest_running", False),
+                    live_trading_enabled=raw.get("live_trading_enabled", True),
+                )
 
-    def get_state(self) -> BotState:
-        return BotState(self._state.value)
+            except Exception as e:
+                logging.critical(f"State file corrupted. Resetting. Error: {e}")
+                return BotState()
 
-    @staticmethod
-    def loadSymbolState(sym: str):
-        with STATE_LOCK:
-            if not STATE_FILE.exists():
-                return SymbolState()
-
-            with open(STATE_FILE, "r") as f:
-                raw: dict = json.load(f)
-
-            return SymbolState(
-                symbol=raw.get(sym, ""),
-                score=raw.get("score", 0),
-                last_backtest=raw("lastbacktest", datetime.now),
-                enabled=False
-            )
+    # -----------------------------------------------------
+    # SAVE BOT STATE (Atomic)
+    # -----------------------------------------------------
 
     @staticmethod
-    def saveBotState(state: BotState):
+    def save_bot_state(state: BotState):
+
         with STATE_LOCK:
+
             payload = {
-                "last_backtest_run": StateManager._dt(state.last_backtest_run),
-                "next_backtest_run": StateManager._dt(state.next_backtest_run),
+                "version": state.version,
+                "last_backtest_run": StateManager._serialize_dt(state.last_backtest_run),
+                "next_backtest_run": StateManager._serialize_dt(state.next_backtest_run),
                 "backtest_running": state.backtest_running,
                 "live_trading_enabled": state.live_trading_enabled,
                 "symbols": {
-                    s.symbol: {
-                        "score": s.score,
-                        "last_backtest": StateManager._dt(s.last_backtest),
-                        "enabled": s.enabled
+                    sym.symbol: {
+                        "score": sym.score,
+                        "last_backtest": StateManager._serialize_dt(sym.last_backtest),
+                        "enabled": sym.enabled
                     }
-                    for s in state.symbols.values()
+                    for sym in state.symbols.values()
                 }
             }
 
             tmp = STATE_FILE.with_suffix(".tmp")
-            with open(tmp, "w") as f:
-                json.dump(payload, f, indent=2)
 
-            tmp.replace(STATE_FILE)
+            try:
+                with open(tmp, "w") as f:
+                    json.dump(payload, f, indent=2)
 
-    # core/scheduler.py
+                tmp.replace(STATE_FILE)
+
+            except Exception as e:
+                logging.error(f"Failed to persist bot state: {e}")
+
+    # -----------------------------------------------------
+    # BACKTEST SCHEDULING
+    # -----------------------------------------------------
+    @staticmethod
     def is_backtest_due(state: BotState) -> bool:
+
         if state.backtest_running:
             return False
 
         if not state.next_backtest_run:
             return True
 
-        return datetime.now(datetime.timezone.utc) >= state.next_backtest_run
+        return datetime.now(timezone.utc) >= state.next_backtest_run
 
+    @staticmethod
     def schedule_next_backtest(state: BotState):
-        state.last_backtest_run = datetime.now(datetime.timezone.utc)
-        state.next_backtest_run = state.last_backtest_run + timedelta(days=90)
+
+        now = datetime.now(timezone.utc)
+
+        state.last_backtest_run = now
+        state.next_backtest_run = now + timedelta(days=90)

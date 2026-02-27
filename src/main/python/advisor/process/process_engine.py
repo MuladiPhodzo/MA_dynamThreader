@@ -12,6 +12,7 @@ from typing import Dict
 from advisor.core import dependency_graph, health_bus, state
 from advisor.scheduler.resource_registry import ResourceRegistry
 from utils.dataHandler import CacheManager
+from .heartbeats import HeartbeatRegistry
 
 # -------------------------
 # Logging Configuration
@@ -54,13 +55,13 @@ class Supervisor:
     HEARTBEAT_TIMEOUT = timedelta(seconds=30)
     RESTART_BACKOFF = 5  # seconds
 
-    def __init__(self, State: state.StateManager):
+    def __init__(self, State: state.StateManager, heartbeats: HeartbeatRegistry):
         self.shutdown = Event()
         self.manager = Manager()
         self.stateManager = State
 
         self.registry = ResourceRegistry(self.manager)
-        self.heartbeats = self.manager.dict()
+        self.heartbeats = heartbeats.beats
         self.health_bus = health_bus.HealthBus(self.manager)
 
         self.dep_graph = dependency_graph.DependencyGraph()
@@ -104,11 +105,14 @@ class Supervisor:
                 self.last_backtest.isoformat() if self.last_backtest else None
             ),
         }
+        
+        state = BotState(
+            version=self.stateManager.version,
+            last_backtest_run=self.last_backtest,
+            
+        )
 
-        with open(tmp, "w") as f:
-            json.dump(state, f, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
+        self.stateManager.save_bot_state(state)
 
         os.replace(tmp, self.STATE_FILE)
 
@@ -283,20 +287,7 @@ if __name__ == "main":
                         v
 
         """
-        cache_handler = CacheManager()
-
         orch = Supervisor(botState, stateManager)
-
-        pl = pipeline_process(client, cache_handler, orch.registry, health_bus, orch.heartbeats, orch.shutdown, orch.stateManager, orch.stateManager)
-        backtest = backtest_process(client, cache_handler, orch.registry, health_bus, orch.heartbeats, orch.shutdown, orch.tate, orch.stateManager)
-        startegy = strategy_process(client, cache_handler, orch.registry, health_bus, orch.heartbeats, orch.shutdown, orch.stateManager, orch.stateManager)
-        _exec = ExecutionProcess(client, orch.signal_store, orch.TradeState, orch.registry, health_bus, orch.heartbeats, orch.shutdown, orch.stateManager, orch.stateManager)
-
-        orch.register_process(name="pipeline", target=pl.start, *(), depends=[])
-        orch.register_process("backtest", backtest.start, *(), depends=["pipeline"])
-        orch.register_process("strategy", startegy.start, *(), depends=["pipeline", "backtest"])
-        orch.register_process("execution", _exec.start, *(), depends=["strategy"])
-
         orch.start()
     except Exception as e:
         logger.critical(f"Supervisor failed to start: {e}", exc_info=True)

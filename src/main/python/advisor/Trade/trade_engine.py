@@ -12,6 +12,7 @@ from advisor.indicators.signal_store import SignalStore
 from advisor.scheduler.requirements import ProcessRequirement
 from .tradeHandler import mt5TradeHandler
 from advisor.core.health_bus import HealthBus
+from advisor.Trade.RiskManager import RiskManager
 
 EXECUTION_REQS = [
     ProcessRequirement("market_data", max_age=timedelta(minutes=5)),
@@ -54,7 +55,7 @@ class ExecutionProcess:
         shutdown_event,
         scheduler: ProcessScheduler,
         stateManager: StateManager,
-        interval=2
+        interval=2,
     ):
         self.client = client
         self.signal_store = signal_store
@@ -67,6 +68,19 @@ class ExecutionProcess:
         self.trade_state = state
         self._state = stateManager
         self.processed_signals = set()  # crash-safe if persisted
+
+        self.risk_manager = RiskManager(
+            client=self.client,
+            trade_state=self.trade_state,
+            state_manager=self._state,
+            health_bus=self.health_bus,
+            persistence=self.persist_data,
+            max_daily_loss_pct=0.05,
+            max_total_dd_pct=0.15,
+            max_trades_per_hour=10,
+            max_symbol_exposure=2,
+            max_consecutive_losses=5
+        )
 
         self._exec_ = mt5TradeHandler(self.client, logger)
 
@@ -141,10 +155,20 @@ class ExecutionProcess:
         if not signal.is_valid():
             return False
 
+        # ------------------------
+        # RISK GATE
+        # ------------------------
+        allowed, lot = self.risk_manager.validate(signal)
+
+        if not allowed:
+            logger.info(f"Risk blocked trade: {signal.symbol}")
+            return False
+
         try:
             trade = self._exec_.place_market_order(
                 symbol=signal.symbol,
                 side=signal.side,
+                lot=lot,
                 sl_points=signal.sl,
                 tp_points=signal.tp
             )
@@ -155,5 +179,5 @@ class ExecutionProcess:
             return True
 
         except Exception as e:
-            logger.error(f"Execution failed: {e}")
+            logger.error(f"Execution failed: {e}", exc_info=True)
             return False

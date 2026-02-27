@@ -46,7 +46,6 @@ class pipelineProcess:
         self.poll_interval = interval
         self.last_run: datetime = None
         self.done: bool = False
-        
         self.state = stateManager
 
         self.registry = registry

@@ -20,7 +20,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 class TradeStats:
     def __init__(self, data_path="stats/trading_stats.csv", reports_path="stats/reports"):
-        self.data_path = data_path
+        self.data_handler.data_path = data_path
         self.reports_path = reports_path
         os.makedirs(os.path.dirname(data_path), exist_ok=True)
         os.makedirs(reports_path, exist_ok=True)
@@ -43,8 +43,8 @@ class TradeStats:
     # Data Persistence
     # -------------------------------------------------------------------------
     def _load_data(self):
-        if os.path.exists(self.data_path):
-            return pd.read_csv(self.data_path, parse_dates=["timestamp"])
+        if os.path.exists(self.data_handler.data_path):
+            return pd.read_csv(self.data_handler.data_path, parse_dates=["timestamp"])
         else:
             return pd.DataFrame(columns=[
                 "timestamp", "symbol", "profit", "balance_before",
@@ -52,7 +52,7 @@ class TradeStats:
             ])
 
     def _save(self):
-        self.df.to_csv(self.data_path, index=False)
+        self.df.to_csv(self.data_handler.data_path, index=False)
 
     # -------------------------------------------------------------------------
     # Data Logging

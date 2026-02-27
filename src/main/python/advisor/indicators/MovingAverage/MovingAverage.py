@@ -53,10 +53,8 @@ class MovingAverageCrossover:
         self.all_timestamps = set()
         self.data_handler = datahandler
         self.backtest: bool = False
-
-        self.data = self.data_handler.data
         try:
-            self.pip_size = self.get_pip_size(self.data.get('30M'))
+            self.pip_size = self.get_pip_size(self.data_handler.data.get('30M'))
         except Exception:
             self.pip_size = 0.0001
 
@@ -125,7 +123,7 @@ class MovingAverageCrossover:
 
         mtf_row_data = {}
         row_futures = {}
-        for tf, df in self.data.items():
+        for tf, df in self.data_handler.data.items():
             if ts in df.index:
                 row_futures[self.executor.submit(
                     check_tf,
@@ -147,8 +145,8 @@ class MovingAverageCrossover:
     def _write_main_trend_to_ltf(self, ts, main_trend):
         """Write Main_Trend back into required LTF rows that match timestamp."""
         for tf in ["15M", "30M"]:
-            if tf in self.data and ts in self.data[tf].index:
-                self.data[tf].loc[ts, "Bias"] = main_trend
+            if tf in self.data_handler.data and ts in self.data_handler.data[tf].index:
+                self.data_handler.data[tf].loc[ts, "Bias"] = main_trend
 
     def _evaluate_trade_outcome(self, df, entry_pos, entry_type, entry_price, sl, tp, pip_size):
         """
@@ -274,7 +272,7 @@ class MovingAverageCrossover:
             count = 0
             prox_meter = []
 
-            for tf, df in list(self.data.items()):
+            for tf, df in list(self.data_handler.data.items()):
                 if not backtest:
                     # only fetch the latest row per df for trend alignment
                     if df is None or not isinstance(df, pd.DataFrame) or df.empty:
@@ -301,12 +299,12 @@ class MovingAverageCrossover:
                             count += 1
 
             prox_true = prox_meter.count(True)
-            majority = len(self.data) // 2 + 1
+            majority = len(self.data_handler.data) // 2 + 1
 
             if count >= majority:
-                return self._classify_bullish_trend(count, len(self.data), prox_true)
+                return self._classify_bullish_trend(count, len(self.data_handler.data), prox_true)
             elif count <= -majority:
-                return self._classify_bearish_trend(count, len(self.data), prox_true)
+                return self._classify_bearish_trend(count, len(self.data_handler.data), prox_true)
 
             return "Neutral"
 
@@ -334,7 +332,7 @@ class MovingAverageCrossover:
                 return
 
             for ts in common_ts:
-                mtf_row_data = self._build_mtf_row_self.data(ts, self.data)
+                mtf_row_data = self._build_mtf_row_data(ts, self.data_handler.data)
 
                 if len(mtf_row_data) == 0:
                     continue
@@ -407,12 +405,12 @@ class MovingAverageCrossover:
         self.backtest_entries(tf, df, pip_distance)
 
         logger.info(f"🎯 Proximity entries generated for timeframe ({tf})")
-        return self.data
+        return self.data_handler.data
 
     # ------------------------------------------------------
     # 7) Backtesting per timeframe
     # ------------------------------------------------------
-    def backtest_entries(self, tf, df: pd.self.dataFrame, pip_distance=100, tp_factor=2):
+    def backtest_entries(self, tf, df: pd.self.data_handler.dataFrame, pip_distance=100, tp_factor=2):
         """
         Backtest entries for each timeframe and update the
         original DataFrame with trade results.
@@ -506,7 +504,7 @@ class MovingAverageCrossover:
             })
 
             # Save updated DataFrame back to storage
-            self.data[tf] = df
+            self.data_handler.data[tf] = df
             self.data_handler.toCSVFile(df, f"src/main/python/Advisor/Logs/{self.symbol}_data/{tf}_backtest.csv")
             # Also save summary results
             all_results[tf] = pd.DataFrame(trades)
@@ -641,7 +639,7 @@ class MovingAverageCrossover:
 
     def plot_backtest_strategy(self):
         """Backtest the strategy by calculating strategy returns."""
-        for tf, df in self.data.items():
+        for tf, df in self.data_handler.data.items():
             if "M" in tf:
                 df = df.copy()
                 df['Position'] = df['Entry'].shift(1) if df["Outcome"] == "TP-Hit" else np.nan  # Avoid lookahead bias
@@ -658,7 +656,7 @@ class MovingAverageCrossover:
         # --- STEP 3: entry detection ---
         entry_futures = {
             self.executor.submit(self.identify_proximity_entries, df, tf): tf
-            for tf, df in self.data.items()
+            for tf, df in self.data_handler.data.items()
             if "M" in tf
         }
 
@@ -666,13 +664,13 @@ class MovingAverageCrossover:
         for f in as_completed(entry_futures):
             tf = entry_futures[f]
             df = f.result()
-            self.data[tf] = df
+            self.data_handler.data[tf] = df
             if tf in ["15M", "30M"]:
                 summaries[tf] = self.generate_backtest_summary(tf, df)[tf]
 
         return {
             "summaries": summaries,
-            "data": self.data
+            "data": self.data_handler.data
         }
 
     def run(self) -> dict[str, pd.DataFrame] | None:
@@ -683,18 +681,18 @@ class MovingAverageCrossover:
         # --- STEP 1: MA calculation (parallel, no early return) ---
         futures = {
             self.executor.submit(self.calculate_moving_averages_data, tf, df): tf
-            for tf, df in self.data.items()
+            for tf, df in self.data_handler.data.items()
             if isinstance(df, pd.DataFrame)
         }
 
         for f in as_completed(futures):
             tf = futures[f]
-            self.data[tf] = f.result()
+            self.data_handler.data[tf] = f.result()
 
         if self.backtest:
             # --- STEP 2: sequence synthesis ---
             self.sequence_Trend_Data()
-            self.data = self.backtest_entries_data()
-            return self.data
-
-        return self.data
+            self.data_handler.data = self.backtest_entries_data()
+            return self.data_handler.data
+        self.identify_Trend_Alignment(False)
+        return self.data_handler.data
