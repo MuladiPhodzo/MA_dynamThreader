@@ -1,0 +1,113 @@
+<div class="layout">
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">MA</div>
+      <div>
+        <div class="title">MovingAverage Advisor</div>
+        <div class="subtitle">Control plane dashboard</div>
+      </div>
+    </div>
+    <div class="topbar-items">
+      <div class="top-chip">
+        <span class="label">Account</span>
+        <span class="value">{{ status?.bot_state?.symbols?.length || 0 }} symbols</span>
+      </div>
+      <div class="top-chip" [class.down]="error">
+        <span class="label">Bot Status</span>
+        <span class="value">{{ error ? "Disconnected" : "Online" }}</span>
+      </div>
+      <div class="top-chip">
+        <span class="label">Time</span>
+        <span class="value">{{ lastUpdated || "—" }}</span>
+      </div>
+      <div class="top-chip">
+        <span class="label">User</span>
+        <span class="value">Operator</span>
+      </div>
+    </div>
+  </header>
+
+  <aside class="sidebar">
+    <div class="nav-title">Navigation</div>
+    <nav class="nav">
+      <button class="nav-item active">Account</button>
+      <button class="nav-item">Symbols</button>
+      <button class="nav-item">Bot</button>
+      <button class="nav-item">Logs</button>
+      <button class="nav-item">Store</button>
+      <button class="nav-item">Support</button>
+    </nav>
+    <div class="sidebar-actions">
+      <button class="primary" (click)="reloadConfig()">Reload Config</button>
+      <button class="ghost" (click)="runBacktest()">Run Backtest Now</button>
+    </div>
+  </aside>
+
+  <main class="content">
+    <section class="grid">
+      <div class="panel">
+        <h2>Processes</h2>
+        <div class="process-list" *ngIf="status; else loadingBlock">
+          <div class="process-card" *ngFor="let name of processNames()">
+            <div class="process-head">
+              <div>
+                <div class="process-name">{{ name }}</div>
+                <div class="process-state">
+                  <span class="dot" [class.ok]="status?.processes[name]?.running"></span>
+                  {{ status?.processes[name]?.running ? "Running" : "Stopped" }}
+                </div>
+              </div>
+              <div class="health-tag">
+                {{ status?.health[name]?.status || "UNKNOWN" }}
+              </div>
+            </div>
+            <div class="process-meta">
+              <div>PID: {{ status?.processes[name]?.pid || "—" }}</div>
+              <div>Restarts: {{ status?.processes[name]?.restart_count }}</div>
+              <div>Heartbeat: {{ status?.processes[name]?.last_heartbeat || "—" }}</div>
+              <div>Deps: {{ status?.processes[name]?.dependencies?.join(", ") || "none" }}</div>
+            </div>
+            <div class="process-actions">
+              <button (click)="start(name)">Start</button>
+              <button (click)="stop(name)">Stop</button>
+              <button class="ghost" (click)="restart(name)">Restart</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Symbols & Telemetry</h2>
+        <div class="telemetry" *ngIf="status">
+          <div class="telemetry-row header">
+            <div>Symbol</div>
+            <div>Enabled</div>
+            <div>Fetch</div>
+            <div>Signals</div>
+            <div>Trades</div>
+            <div>Errors</div>
+            <div>Last Error</div>
+          </div>
+          <div class="telemetry-row" *ngFor="let sym of symbolNames()">
+            <div class="mono">{{ sym }}</div>
+            <div>
+              <button class="toggle" [class.on]="status?.telemetry[sym]?.enabled" (click)="toggle(sym)">
+                {{ status?.telemetry[sym]?.enabled ? "On" : "Off" }}
+              </button>
+            </div>
+            <div>{{ status?.telemetry[sym]?.data_fetch_count }}</div>
+            <div>{{ status?.telemetry[sym]?.signal_count }}</div>
+            <div>{{ status?.telemetry[sym]?.trade_count }}</div>
+            <div>{{ status?.telemetry[sym]?.error_count }}</div>
+            <div class="mono">{{ status?.telemetry[sym]?.last_error || "—" }}</div>
+          </div>
+        </div>
+        <div class="empty" *ngIf="!status">No telemetry yet.</div>
+      </div>
+    </section>
+  </main>
+
+  <ng-template #loadingBlock>
+    <div class="empty">Loading status…</div>
+  </ng-template>
+</div>

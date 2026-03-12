@@ -3,9 +3,10 @@ import logging
 import signal
 import sys
 import time
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from multiprocessing import Manager, Process
+from multiprocessing import Manager
 from pathlib import Path
 
 from advisor.core import dependency_graph, health_bus
@@ -31,7 +32,7 @@ class ManagedProcess:
     target: callable
     args: tuple = field(default_factory=tuple)
     dependencies: list[str] = field(default_factory=list)
-    process: Process | None = None
+    process: threading.Thread | None = None
     restart_count: int = 0
 
 
@@ -97,9 +98,64 @@ class Supervisor:
         self.restart_counts.setdefault(name, 0)
         self.dep_graph.add(name, depends or [])
 
+    def get_process_snapshot(self) -> dict[str, dict]:
+        snapshot = {}
+        for name, proc in self.processes.items():
+            is_alive = bool(proc.process and proc.process.is_alive())
+            snapshot[name] = {
+                "running": is_alive,
+                "pid": proc.process.pid if is_alive else None,
+                "restart_count": proc.restart_count,
+                "last_heartbeat": self.heartbeats.get(name),
+                "dependencies": list(self.dep_graph.graph.get(name, [])),
+            }
+        return snapshot
+
+    def start_process(self, name: str) -> bool:
+        proc = self.processes.get(name)
+        if proc is None:
+            return False
+        if proc.process and proc.process.is_alive():
+            return True
+        deps = self.dep_graph.graph.get(name, [])
+        for dep in deps:
+            dep_proc = self.processes.get(dep)
+            if not dep_proc or not dep_proc.process or not dep_proc.process.is_alive():
+                logger.warning("Cannot start %s; dependency %s not running", name, dep)
+                return False
+        self._spawn(proc)
+        return True
+
+    def stop_process(self, name: str) -> bool:
+        proc = self.processes.get(name)
+        if proc is None:
+            return False
+        instance = getattr(proc.target, "__self__", None)
+        if instance is not None and hasattr(instance, "stop_event"):
+            try:
+                instance.stop_event.set()
+            except Exception:
+                pass
+        if proc.process and proc.process.is_alive():
+            proc.process.join(timeout=10)
+        return True
+
+    def restart_process(self, name: str) -> bool:
+        proc = self.processes.get(name)
+        if proc is None:
+            return False
+        self._restart(proc)
+        return True
+
     def _spawn(self, proc: ManagedProcess) -> None:
         logger.info("Starting %s", proc.name)
-        proc.process = Process(target=proc.target, name=proc.name, args=proc.args, daemon=True)
+        instance = getattr(proc.target, "__self__", None)
+        if instance is not None and hasattr(instance, "stop_event"):
+            try:
+                instance.stop_event.clear()
+            except Exception:
+                pass
+        proc.process = threading.Thread(target=proc.target, name=proc.name, args=proc.args, daemon=True)
         proc.process.start()
         self.heartbeats[proc.name] = datetime.now(timezone.utc).isoformat()
 
@@ -114,8 +170,13 @@ class Supervisor:
         self._persist_state()
         self.state_manager.set_state(BotLifecycle.RECOVERING)
 
+        instance = getattr(proc.target, "__self__", None)
+        if instance is not None and hasattr(instance, "stop_event"):
+            try:
+                instance.stop_event.set()
+            except Exception:
+                pass
         if proc.process and proc.process.is_alive():
-            proc.process.terminate()
             proc.process.join(timeout=5)
 
         self._spawn(proc)
@@ -139,8 +200,13 @@ class Supervisor:
         logger.warning("Stopping all processes")
         self.state_manager.set_state(BotLifecycle.STOPPING)
         for proc in self.processes.values():
+            instance = getattr(proc.target, "__self__", None)
+            if instance is not None and hasattr(instance, "stop_event"):
+                try:
+                    instance.stop_event.set()
+                except Exception:
+                    pass
             if proc.process and proc.process.is_alive():
-                proc.process.terminate()
                 proc.process.join(timeout=10)
         self.state_manager.set_state(BotLifecycle.STOPPED)
 

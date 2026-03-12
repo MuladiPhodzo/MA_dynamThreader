@@ -1,0 +1,9 @@
+{
+  "restart_counts": {
+    "pipeline": 5,
+    "backtest": 5,
+    "strategy": 5,
+    "execution": 5
+  },
+  "last_backtest": null
+}

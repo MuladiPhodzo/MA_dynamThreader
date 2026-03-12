@@ -1,0 +1,35 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap");
+
+:root {
+  color-scheme: light;
+  --bg-1: #0d1b2a;
+  --bg-2: #1b263b;
+  --bg-3: #415a77;
+  --ink: #f4f7ff;
+  --muted: #b8c2d6;
+  --accent: #ffb703;
+  --accent-2: #e63946;
+  --panel: rgba(17, 29, 46, 0.86);
+  --panel-border: rgba(255, 255, 255, 0.08);
+  --ok: #29c56b;
+  --warn: #ff8f3f;
+  --bad: #ff4d6d;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Space Grotesk", system-ui, -apple-system, sans-serif;
+  background: radial-gradient(circle at 10% 10%, #2b4162 0, #0d1b2a 45%, #070b12 100%);
+  color: var(--ink);
+  min-height: 100vh;
+}
+
+button,
+input,
+select {
+  font-family: inherit;
+}

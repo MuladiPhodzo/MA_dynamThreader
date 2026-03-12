@@ -18,6 +18,7 @@ from advisor.utils.dataHandler import CacheManager
 from advisor.GUI.userInput import setUpWizard
 from advisor.Client.mt5Client import MetaTrader5Client
 from advisor.Client.symbols.symbol_watch import SymbolWatch
+from advisor.api.server import DashboardContext, DashboardServer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,7 +40,8 @@ class Main:
         self.scheduler = ProcessScheduler(None)
         self.heartbeats = HeartbeatRegistry()
         self.signal_store = SignalStore()
-        self.trade_state = TradeStateManager()
+        self.client = MetaTrader5Client()
+        self.trade_state = TradeStateManager(self.client)
         self.cache_handler = CacheManager()
         self.orch = Supervisor(self.shutdown_event, self.state_manager, self.heartbeats)
         self.scheduler.registry = self.orch.registry
@@ -47,8 +49,8 @@ class Main:
 
         self.bot_state = self.state_manager.bot
         self.symbol_watch = SymbolWatch(self.bot_state)
-        self.client = MetaTrader5Client()
         self.objects = None
+        self.dashboard = None
         self._load_configs()
         self._connect_client()
         self._init_core_instances()
@@ -56,9 +58,13 @@ class Main:
 
     def _load_configs(self):
         try:
-            self.objects = self.bootstrap.initialize()
-            if hasattr(self.objects, "creds"):
-                self.objects = setUpWizard()
+            boot = self.bootstrap.initialize()
+            self.config = boot.get("config")
+            self.objects = {
+                "creds": self.config.creds,
+                "trade_configs": self.config.trade,
+                "account_data": self.config.account,
+            }
         except BootstrapError as e:
             logger.critical("Bootstrap failed: %s", e)
             raise
@@ -119,6 +125,15 @@ class Main:
             symbol_watch=self.symbol_watch,
         )
 
+        self.dashboard = DashboardServer(
+            DashboardContext(
+                supervisor=self.orch,
+                state_manager=self.state_manager,
+                symbol_watch=self.symbol_watch,
+                health_bus=self.orch.health_bus,
+            )
+        )
+
         self.orch.register_process(name="pipeline", target=self.pipeline.start, depends=[])
         self.orch.register_process(name="backtest", target=self.backtest.start, depends=["pipeline"])
         self.orch.register_process(name="strategy", target=self.strategy.start, depends=["pipeline", "backtest"])
@@ -136,6 +151,8 @@ class Main:
         try:
             self._restore_open_positions()
             self.state_manager.set_state(BotLifecycle.RUNNING)
+            if self.dashboard:
+                self.dashboard.start()
             self.orch.start()
             logger.info("All Engines Running")
         except Exception as e:

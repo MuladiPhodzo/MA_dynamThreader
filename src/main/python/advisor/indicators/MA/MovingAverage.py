@@ -8,9 +8,9 @@ from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
-from advisor.utils.dataHandler import CacheManager, dataHandler
+from advisor.utils.dataHandler import CacheManager, DataHandler
 from advisor.Client.mt5Client import MetaTrader5Client
-from core.state import SymbolState
+from advisor.core.state import SymbolState
 # -------------------------
 # Logging Configuration
 # -------------------------
@@ -46,6 +46,7 @@ class MovingAverageCrossover:
         """
         self.client = client
         self.symbol = symbol
+        self.symbol_name = symbol.symbol if hasattr(symbol, "symbol") else str(symbol)
         self.fast_period = fast_period
         self.slow_period = slow_period
         self.pip_distance = pip_distance
@@ -54,7 +55,7 @@ class MovingAverageCrossover:
 
         self.executor = ThreadPoolExecutor(max_workers=20)
         self.all_timestamps = set()
-        self.data_handler = dataHandler(self.slow_period, logger.name, self.cache.get(self.symbol.symbol))
+        self.data_handler = DataHandler(self.symbol_name, logger.name, self.cache)
 
         self.results: dict = {}
         try:
@@ -210,7 +211,7 @@ class MovingAverageCrossover:
             return
 
         if 'close' not in df.columns:
-            logger.warning(f"{self.symbol.symbol} {tf} missing 'close' column — skipping TF.")
+            logger.warning(f"{self.symbol_name} {tf} missing 'close' column — skipping TF.")
             return
 
         # Ensure datetime index if 'time' exists
@@ -235,7 +236,7 @@ class MovingAverageCrossover:
             df.loc[:, 'Proximity'] = (df['close'] - df['Slow_MA']).abs() <= threshold
             df.dropna()
         except Exception as e:
-            logger.exception(f"exception in proximity calculation for {self.symbol.symbol} {tf}: {e}")
+            logger.exception(f"exception in proximity calculation for {self.symbol_name} {tf}: {e}")
 
         if self.verify_fields():
             self.data_handler.update_timestamps(self._build_all_timestamps(df))
@@ -253,18 +254,18 @@ class MovingAverageCrossover:
         try:
 
             if df is None or not isinstance(df, pd.DataFrame):
-                logger.warning(f"{self.symbol.symbol} {tf} is None or not a DataFrame, instance == {type(df)}")
+                logger.warning(f"{self.symbol_name} {tf} is None or not a DataFrame, instance == {type(df)}")
                 raise ValueError("df missing critical computational fields")
 
             # Ensure required MA columns exist
             if not fields.issubset(df.columns):
-                logger.warning(f"{self.symbol.symbol}-{tf} missing MA columns; creating with NaN.")
+                logger.warning(f"{self.symbol_name}-{tf} missing MA columns; creating with NaN.")
                 for col in ['Fast_MA', 'Slow_MA', 'Proximity']:
                     if col not in df.columns:
                         df[col] = np.nan
                 return False
 
-            logger.info(f"🎯 Proximity check completed for all timeframes ({self.symbol.symbol})")
+            logger.info(f"🎯 Proximity check completed for all timeframes ({self.symbol_name})")
             # NOTE: do not auto-run sequence_data here if caller wants control
             return True
         except Exception as e:
@@ -338,7 +339,7 @@ class MovingAverageCrossover:
                 )
             )
             if not common_ts:
-                logger.warning(f"{self.symbol.symbol}: No timestamps found for MTF alignment.")
+                logger.warning(f"{self.symbol_name}: No timestamps found for MTF alignment.")
                 return
 
             ts_futures = {}
@@ -358,7 +359,7 @@ class MovingAverageCrossover:
                 main_trend = self.identify_Trend_Alignment(mtf_snapshot)
                 self._write_main_trend_to_ltf(ts, main_trend)
 
-            logger.info(f"✔ Timestamp-aligned MTF Main_Trend computed for {self.symbol.symbol}")
+            logger.info(f"✔ Timestamp-aligned MTF Main_Trend computed for {self.symbol_name}")
 
         except Exception as e:
             logger.exception(f"Exception in timestamp-based sequence_data: {e}")
@@ -372,7 +373,7 @@ class MovingAverageCrossover:
         """
         # Skip the Main Trend key
         if df is None:
-            logger.warning(f'{self.symbol.symbol} {tf}: data is none == {df}')
+            logger.warning(f'{self.symbol_name} {tf}: data is none == {df}')
             return
 
         if "M" not in tf:
@@ -446,7 +447,7 @@ class MovingAverageCrossover:
 
         # Skip invalid items
         if df is None:
-            logger.warning(f'{self.symbol.symbol} {tf} is None: {df}')
+            logger.warning(f'{self.symbol_name} {tf} is None: {df}')
             return
 
         if tf not in ["15M", "30M"] or not isinstance(df, pd.DataFrame):
@@ -524,10 +525,10 @@ class MovingAverageCrossover:
 
             # Save updated DataFrame back to storage
             self.data_handler.data[tf] = df
-            self.data_handler.save_data_toCSVFile(df, f"src/main/python/Advisor/Logs/{self.symbol.symbol}_data/{tf}_backtest.csv")
+            self.data_handler.save_data_toCSVFile(df, f"src/main/python/Advisor/Logs/{self.symbol_name}_data/{tf}_backtest.csv")
             # Also save summary results
             all_trades[tf] = trades
-            logger.info(f"[{self.symbol.symbol}][{tf}] Backtest complete — {len(all_trades[tf])} trades updated.")
+            logger.info(f"[{self.symbol_name}][{tf}] Backtest complete — {len(all_trades[tf])} trades updated.")
 
         return all_trades
 
@@ -707,7 +708,7 @@ class MovingAverageCrossover:
             # --- STEP 2: sequence synthesis ---
             self.sequence_Trend_Data()
             self.results = self.backtest_entries_data()
-            key = self.symbol.symbol + "_backtest_summary"
+            key = self.symbol_name + "_backtest_summary"
             self.cache.set(key, results)
             return None
 

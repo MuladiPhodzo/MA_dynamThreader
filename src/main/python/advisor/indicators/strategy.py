@@ -12,7 +12,7 @@ from advisor.scheduler.requirements import ProcessRequirement
 from advisor.scheduler.resource_registry import ResourceRegistry
 from advisor.utils import dataHandler
 from advisor.indicators.MA.MovingAverage import MovingAverageCrossover
-from indicators.Volume.volumeindex import VolumeIndex
+from advisor.indicators.Volume.volumeindex import VolumeIndex
 from advisor.Client.symbols.symbol_watch import SymbolWatch
 
 logging.basicConfig(

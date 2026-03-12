@@ -1,12 +1,12 @@
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from multiprocessing import Manager
 from multiprocessing.managers import SyncManager
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from advisor.core.locks import STATE_LOCK
 
@@ -39,19 +39,25 @@ class Strategy:
 
 
 @dataclass
+class symbolStrategy:
+    EMA: Any = None
+    Volume: Any = None
+
+
+@dataclass
 class SymbolState:
     symbol: str = ''
-    strategies: list[Strategy] = None
+    strategies: list[Strategy] = field(default_factory=list)
     score: float = 0.0
     last_backtest: Optional[datetime] = None
     enabled: bool = False
-    meta: dict = {}
+    meta: dict = field(default_factory=dict)
 
 
 @dataclass
 class BotState:
     version: str = "1.0"
-    symbols: list[SymbolState] = None
+    symbols: list[SymbolState] = field(default_factory=list)
     live_trading_enabled: bool = True
 
     backtest_running: bool = False
@@ -121,8 +127,14 @@ class StateManager:
     def load_bot_state() -> BotState:
 
         with STATE_LOCK:
+            if STATE_FILE.exists() and STATE_FILE.is_dir():
+                try:
+                    STATE_FILE.rmdir()
+                except Exception as e:
+                    logging.critical(f"State file path is a directory and could not be removed: {e}")
+                    return BotState()
             if not STATE_FILE.exists():
-                STATE_FILE.mkdir()
+                STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
                 new = BotState()
                 StateManager.save_bot_state(new)
                 logging.warning("State file not found. Creating fresh state.")

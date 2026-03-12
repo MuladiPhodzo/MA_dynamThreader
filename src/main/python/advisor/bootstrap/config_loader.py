@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 
 
 class ConfigError(Exception):
@@ -9,9 +10,16 @@ class ConfigError(Exception):
 class UserConfig:
 
     def __init__(self, path="configs.json"):
-        self.path = path
+        self.path = self._resolve_path(path)
         self.data = self._load()
         self._validate()
+
+    def _resolve_path(self, path: str) -> str:
+        if os.path.isabs(path):
+            return path
+        base = Path(__file__).resolve()
+        root = base.parents[5]
+        return str(root / path)
 
     def _load(self):
         if not os.path.exists(self.path):
