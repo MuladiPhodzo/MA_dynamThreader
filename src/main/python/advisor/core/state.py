@@ -1,14 +1,12 @@
-# core/state.py
-
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from multiprocessing import Manager
 from multiprocessing.managers import SyncManager
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Callable, Optional
 
 from advisor.core.locks import STATE_LOCK
 
@@ -18,11 +16,6 @@ from advisor.core.locks import STATE_LOCK
 # =========================================================
 
 STATE_FILE = Path("bot_state.json")
-
-
-# =========================================================
-# ENUM (STABLE — NOT DYNAMIC)
-# =========================================================
 
 class BotLifecycle(Enum):
     STARTING = 1
@@ -38,27 +31,41 @@ class BotLifecycle(Enum):
 # =========================================================
 # DATA STRUCTURES
 # =========================================================
+@dataclass
+class Strategy:
+    strategy_name: str
+    strategy: Callable = None
+    strategy_score: float = 0.0
+
 
 @dataclass
 class SymbolState:
-    symbol: str
+    symbol: str = ''
+    strategies: list[Strategy] = None
     score: float = 0.0
     last_backtest: Optional[datetime] = None
     enabled: bool = False
+    meta: dict = {}
 
 
 @dataclass
 class BotState:
     version: str = "1.0"
+    symbols: list[SymbolState] = None
+    live_trading_enabled: bool = True
 
+    backtest_running: bool = False
     last_backtest_run: Optional[datetime] = None
     next_backtest_run: Optional[datetime] = None
 
-    symbols: Dict[str, SymbolState] = field(default_factory=dict)
-
-    backtest_running: bool = False
-    live_trading_enabled: bool = True
     state: BotLifecycle = BotLifecycle.STOPPED
+
+
+@dataclass
+class ClientState:
+    server: str = None
+    account_id: int = None
+    connected: bool = False
 
 
 # =========================================================
@@ -115,22 +122,26 @@ class StateManager:
 
         with STATE_LOCK:
             if not STATE_FILE.exists():
+                STATE_FILE.mkdir()
+                new = BotState()
+                StateManager.save_bot_state(new)
                 logging.warning("State file not found. Creating fresh state.")
-                return BotState()
+                return new
 
             try:
                 with open(STATE_FILE, "r") as f:
                     raw = json.load(f)
 
-                symbols = {
-                    k: SymbolState(
+                symbols = [
+                    SymbolState(
                         symbol=k,
+                        strategies=[],
                         score=v.get("score", 0.0),
                         last_backtest=StateManager._parse_dt(v.get("last_backtest")),
                         enabled=v.get("enabled", False)
                     )
                     for k, v in raw.get("symbols", {}).items()
-                }
+                ]
 
                 return BotState(
                     version=raw.get("version", "1.0"),
@@ -166,7 +177,7 @@ class StateManager:
                         "last_backtest": StateManager._serialize_dt(sym.last_backtest),
                         "enabled": sym.enabled
                     }
-                    for sym in state.symbols.values()
+                    for sym in state.symbols
                 }
             }
 

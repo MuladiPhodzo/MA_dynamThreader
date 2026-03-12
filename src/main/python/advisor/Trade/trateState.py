@@ -1,11 +1,12 @@
 import datetime as dt
 
-import MetaTrader5 as mt5
+from advisor.Client.mt5Client import MetaTrader5Client
 
 
 class TradeStateManager:
-    def __init__(self, symbol: str | None = None, magic_number: int = 8000):
+    def __init__(self, client: MetaTrader5Client, symbol: str | None = None, magic_number: int = 8000):
         self.symbol = symbol
+        self.client = client
         self.magic_number = magic_number
         self.active: dict[int, dict] = {}
         self.closed: dict[int, dict] = {}
@@ -14,7 +15,7 @@ class TradeStateManager:
         ticket = trade_info.get("ticket")
         if ticket is None:
             return
-        self.active[ticket] = {**trade_info, "open_time": dt.datetime.now(dt.timezone.utc)}
+        self.active[ticket] = {"open_time": dt.datetime.now(dt.timezone.utc), **trade_info}
 
     def get_active_trades(self):
         return list(self.active.values())
@@ -24,7 +25,7 @@ class TradeStateManager:
 
     def sync_closed(self):
         utc_from = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=5)
-        deals = mt5.history_deals_get(utc_from, dt.datetime.now(dt.timezone.utc))
+        deals = self.client.get_history(utc_from)
         if not deals:
             return
 

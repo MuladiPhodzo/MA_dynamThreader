@@ -7,14 +7,26 @@
     "trade_configs": {
         "volume": "0.01",
         "pip_distance": 250,
-        "rr_ratio": "1:3"
+        "rr_ratio": "1:3",
+        "trailing_sl": "False"
     },
     "account_data": {
         "Equity": 0,
-        "init_deposit": 0,
-        "trailing_sl": "True",
+        "deposit": 0,
         "max_open_trades": 10,
         "max_daily_loss": 10,
         "max_concurrent_trades": 5
+    },
+    "symbols": {
+        "usdjpy": {
+            "last_backtest": "",
+            "score": 0.0,
+            "enabled": "False"
+        },
+        "gbpusd": {
+            "last_backtest": "",
+            "score": 0.0,
+            "enabled": "False"
+        }
     }
 }

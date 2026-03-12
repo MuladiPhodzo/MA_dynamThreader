@@ -14,4 +14,4 @@ def test_determine_bar_count_backtest_true():
 def test_get_equity(mock_account_info):
     mock_account_info.return_value = type("A", (), {"equity": 1234.5})()
     client = MetaTrader5Client()
-    assert client.get_equity() == 1234.5
+    assert client.get_acc_attr("equity") == 1234.5

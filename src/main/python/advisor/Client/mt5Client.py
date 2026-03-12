@@ -1,5 +1,4 @@
 import threading
-from dateutil.relativedelta import relativedelta
 
 import time
 import sys
@@ -30,7 +29,7 @@ logger = logging.getLogger(__name__)
 class MetaTrader5Client:
     def __init__(self):
         self.symbols = []
-        self.creds = None
+        self.trade_cfg = None
         self.account_info = None
         self.terminal_info = None
         self.THRESHOLD = 0.0100
@@ -39,15 +38,18 @@ class MetaTrader5Client:
         self._tf_last_fetch = {}      # {(symbol, tf): datetime}
         self._symbol_lock = threading.Lock()
 
+        self.account_info = None
+
         self.TF_dict = {
-            '15M': {"tf_val": mt5.TIMEFRAME_M15, "interval_minutes": 15},
-            '30M': {"tf_val": mt5.TIMEFRAME_M30, "interval_minutes": 30},
-            '1H': {"tf_val": mt5.TIMEFRAME_H1, "interval_minutes": 60},
-            '2H': {"tf_val": mt5.TIMEFRAME_H2, "interval_minutes": 120},
-            '4H': {"tf_val": mt5.TIMEFRAME_H4, "interval_minutes": 240},
-            '6H': {"tf_val": mt5.TIMEFRAME_H6, "interval_minutes": 360},
-            '8H': {"tf_val": mt5.TIMEFRAME_H8, "interval_minutes": 480},
-            '1D': {"tf_val": mt5.TIMEFRAME_D1, "interval_minutes": 1440},
+            '5M': {"tf_val": mt5.TIMEFRAME_M5, "prox_limit": 100, "interval_minutese": 5},
+            '15M': {"tf_val": mt5.TIMEFRAME_M15, "prox_limit": 100, "interval_minutes": 15},
+            '30M': {"tf_val": mt5.TIMEFRAME_M30, "prox_limit": 100, "interval_minutes": 30},
+            '1H': {"tf_val": mt5.TIMEFRAME_H1, "prox_limit": 150, "interval_minutes": 60},
+            '2H': {"tf_val": mt5.TIMEFRAME_H2, "prox_limit": 200, "interval_minutes": 120},
+            '4H': {"tf_val": mt5.TIMEFRAME_H4, "prox_limit": 250, "interval_minutes": 240},
+            '6H': {"tf_val": mt5.TIMEFRAME_H6, "prox_limit": 300, "interval_minutes": 360},
+            '8H': {"tf_val": mt5.TIMEFRAME_H8, "prox_limit": 350, "interval_minutes": 480},
+            '1D': {"tf_val": mt5.TIMEFRAME_D1, "prox_limit": 400, "interval_minutes": 1440},
         }
 
         self.data_executor = ThreadPoolExecutor(max_workers=5)
@@ -68,41 +70,39 @@ class MetaTrader5Client:
 
     def initialize(self, user_data):
         logger.info("🔑 Logging in to MetaTrader 5...")
+        try:
 
-        res = self.connect_account(user_data)
+            res = self.connect_account(user_data)
 
-        if not res:
-            messagebox.showerror(
-                "Connection failed", f"Failed to log in with error code ={mt5.last_error()}")
-            logger.info(f"failed to log in with error code ={mt5.last_error()}")
-            self.close()
-            return False
-        else:
-            logger.info(
-                f"✅ Successfully connected to MT5 account {user_data['account_id']} on server '{user_data['server']}'")
-            self.account_info = mt5.account_info()._asdict()
-            self.terminal_info = mt5.terminal_info()._asdict()
-            self.creds = user_data
-            logger.info('fetching all available symbols...')
-            self.symbols = self.get_Symbols()
-            return True
-
-    def get_acc_attr(self, name):
-        self.account_info = mt5.account_info()._asdict()
-        return self.account_info.get(name)
+            if not res:
+                messagebox.showerror(
+                    "Connection failed", f"Failed to log in with error code ={mt5.last_error()}")
+                logger.info(f"failed to log in with error code ={mt5.last_error()}")
+                self.close()
+                return False
+            else:
+                logger.info(
+                    f"✅ Successfully connected to MT5 account {user_data['account_id']} on server '{user_data['server']}'")
+                self.account_info = mt5.account_info()._asdict()
+                self.terminal_info = mt5.terminal_info()._asdict()
+                self.creds = user_data
+                logger.info('fetching all available symbols...')
+                self.symbols = self.get_Symbols()
+                return True
+        except ConnectionError as e:
+            logger.critical(f"Connection to Metatrader terminal refused with: {e}")
 
     def connect_account(self, user_data):
-        try:
-            if user_data is not None:
-                if not mt5.initialize(login=int(user_data['account_id']),
-                                      password=user_data['password'],
-                                      server=user_data['server']):
-                    return False
-                else:
-                    return True
-        except Exception as e:
-            logger.info(f"❌ Exception during MT5 initialization: {e}")
-            return False
+        if user_data is not None:
+            if not mt5.initialize(
+                login=int(user_data['account_id']),
+                password=user_data['password'],
+                server=user_data['server']
+            ):
+                return False
+            else:
+                return True
+        raise ConnectionError
 
     def check_symbols_availability(self):
         """
@@ -131,6 +131,12 @@ class MetaTrader5Client:
             symbols.append(symbol.name)
         return symbols
 
+    def get_acc_attr(self, name):
+        return self.account_info.get(name)
+
+    def get_history(self, utc_from):
+        return mt5.history_deals_get(utc_from, datetime.now(datetime.timezone.utc))
+
     def get_live_data(self, symbol, timeframe , bars=1000) -> pd.DataFrame:
         """
         Fetch live market data for a given symbol and timeframe.
@@ -157,23 +163,6 @@ class MetaTrader5Client:
 
         return data
 
-    def get_rates_range(self, symbol, tf_name, tf_value) -> pd.DataFrame:
-        data = pd.DataFrame()
-        end_date = datetime.datetime.now()
-        start_date = end_date - relativedelta(months=6)
-
-        rates = mt5.copy_rates_range(
-            symbol, tf_value, start_date, end_date)
-        if rates is not None:
-            data = pd.DataFrame(rates)
-            # convert timestamps to datetime
-            data['time'] = pd.to_datetime(data['time'], unit='s')
-        else:
-            logger.info(
-                f"Error in {symbol} {tf_name}: {mt5.last_error()}")
-
-        return data
-
     def _should_fetch_tf(self, symbol: str, tf_name: str) -> bool:
 
         from datetime import datetime, timedelta
@@ -197,12 +186,6 @@ class MetaTrader5Client:
                 return True
 
         return False
-
-    def get_equity(self) -> float:
-        info = mt5.account_info()
-        if info is None:
-            return 0.0
-        return float(info.equity)
 
     def get_multi_tf_data(self, symbol) -> dict[str, pd.DataFrame] | None:
         """

@@ -11,6 +11,7 @@ from advisor.scheduler.process_sceduler import ProcessScheduler
 from advisor.scheduler.requirements import ProcessRequirement
 from advisor.scheduler.resource_registry import ResourceRegistry
 from advisor.utils.dataHandler import CacheManager
+from advisor.Client.symbols.symbol_watch import SymbolWatch
 
 logging.basicConfig(
     level=logging.INFO,
@@ -41,6 +42,7 @@ class backtestProcess:
         bot_state,
         state_manager: StateManager,
         scheduler: ProcessScheduler,
+        symbol_watch: SymbolWatch,
     ):
         self.client = client
         self.cache = cache_handler
@@ -51,6 +53,7 @@ class backtestProcess:
         self.scheduler = scheduler
         self.bot_state = bot_state
         self.state_manager = state_manager
+        self.symbol_watch = symbol_watch
 
         self.registry.register("backtest_data")
         self.registry.register("symbols")
@@ -75,19 +78,29 @@ class backtestProcess:
             return
 
         self.state_manager.set_state(BotLifecycle.RUNNING_BACKTEST)
-        symbols = list(getattr(self.client, "symbols", []))
+        symbols = self.symbol_watch.active_symbol_names()
 
         for sym in symbols:
             data = await asyncio.to_thread(self.client.get_multi_tf_data, sym)
             if data:
                 self.cache.set(sym, data)
+                self.symbol_watch.mark_data_fetch(sym)
+            else:
+                self.symbol_watch.mark_error(sym, "backtest fetch failed")
 
         self.registry.set_ready("backtest_data")
         self.registry.set_ready("symbols")
         self._save_last_backtest_time(now)
         self.state_manager.last_backtest_run = now
         self.state_manager.set_state(BotLifecycle.RUNNING)
-        self.health_bus.update(self.name, "RUNNING", {"active_symbols": len(symbols)})
+        self.health_bus.update(
+            self.name,
+            "RUNNING",
+            {
+                "active_symbols": len(symbols),
+                "telemetry": self.symbol_watch.snapshot(),
+            },
+        )
 
     async def _run_loop(self):
         while not self.stop_event.is_set():

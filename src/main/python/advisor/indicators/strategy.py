@@ -5,11 +5,15 @@ import threading
 from datetime import datetime, timedelta, timezone
 
 from advisor.core.health_bus import HealthBus
-from advisor.core.state import BotLifecycle, StateManager
+from advisor.core.state import BotLifecycle, StateManager, symbolStrategy
 from advisor.indicators.signal_store import SignalStore
 from advisor.scheduler.process_sceduler import ProcessScheduler
 from advisor.scheduler.requirements import ProcessRequirement
 from advisor.scheduler.resource_registry import ResourceRegistry
+from advisor.utils import dataHandler
+from advisor.indicators.MA.MovingAverage import MovingAverageCrossover
+from indicators.Volume.volumeindex import VolumeIndex
+from advisor.Client.symbols.symbol_watch import SymbolWatch
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,14 +27,13 @@ logging.basicConfig(
 logger = logging.getLogger("Strategy_Manager")
 
 STRATEGY_REQS = [ProcessRequirement("market_data", max_age=timedelta(minutes=5))]
-
-
 class strategyManager:
     name = "Strategy"
 
     def __init__(
         self,
         client,
+        cache_handler: dataHandler.CacheManager,
         shutdown_event: threading.Event,
         heartbeats: dict,
         health_bus: HealthBus,
@@ -38,18 +41,24 @@ class strategyManager:
         scheduler: ProcessScheduler,
         store: SignalStore,
         state: StateManager,
+        symbol_watch: SymbolWatch,
         interval=5,
     ):
         self.client = client
+        self.cache = cache_handler
         self.registry = registry
         self.scheduler = scheduler
         self.signal_store = store
         self.state = state
+        self.symbol_watch = symbol_watch
 
         self.health_bus = health_bus
         self.heartbeats = heartbeats
         self.stop_event = shutdown_event
         self.interval = interval
+
+        self.strategies: dict[str, symbolStrategy] = {}
+        self._init_symbol_strategys()
 
         self.registry.register("signals")
 
@@ -70,37 +79,48 @@ class strategyManager:
                 task=self._run_cycle,
                 shutdown_event=self.stop_event,
                 heartbeats=self.heartbeats,
-                timeout=60,
+                timeout=100,
             )
             await asyncio.sleep(self.interval)
 
     async def _run_cycle(self):
         produced = 0
-        for symbol in list(getattr(self.client, "symbols", [])):
+        for symbol in self.symbol_watch.active_symbol_names():
             payload = await asyncio.to_thread(self._build_signal, symbol)
             if payload is None:
                 continue
             self.signal_store.add_signal(payload)
+            self.symbol_watch.mark_signal(symbol)
             produced += 1
 
         self.registry.set_ready("signals")
         self.heartbeats[self.name] = datetime.now(timezone.utc).isoformat()
-        self.health_bus.update(self.name, "RUNNING", {"signals": produced})
+        self.health_bus.update(
+            self.name,
+            "RUNNING",
+            {
+                "signals": produced,
+                "telemetry": self.symbol_watch.snapshot(),
+            },
+        )
 
     def _build_signal(self, symbol: str):
-        data = self.client.get_multi_tf_data(symbol)
-        if not data:
+        sym = self.strategies[symbol]
+        try:
+            data = sym.stratey.run()
+        except Exception as e:
+            logger.exception("Signal build failed for %s: %s", symbol, e)
+            self.symbol_watch.mark_error(symbol, f"signal build failed: {e}")
             return None
-        frame = data.get("15M") or next(iter(data.values()))
+        if not data or hasattr(data["sig"], "(W)"):
+            return None
+
+        frame = data["frame"]
         if frame is None or getattr(frame, "empty", True):
             return None
 
-        close = frame["close"]
-        if len(close) < 3:
-            return None
-
-        side = "buy" if close.iloc[-1] > close.iloc[-2] else "sell"
-        price = float(close.iloc[-1])
+        side = data["sig"]
+        price = float(frame["close"])
         sl = max(price * 0.001, 1e-6)
         tp = max(price * 0.002, 1e-6)
         return {
@@ -112,3 +132,9 @@ class strategyManager:
             "timestamp": datetime.now(timezone.utc),
             "data": {"price": price},
         }
+
+    def _init_symbol_strategys(self):
+        for symbol in self.symbol_watch.active_symbol_names():
+            strategy_instance = MovingAverageCrossover(symbol=symbol, client=self.client, backtest=False, cache=self.cache)
+            strategy = symbolStrategy(EMA=strategy_instance, Volume=VolumeIndex())
+            self.strategies[symbol] = strategy

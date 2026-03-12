@@ -8,7 +8,7 @@ class ConfigError(Exception):
 
 class UserConfig:
 
-    def __init__(self, path="user.json"):
+    def __init__(self, path="configs.json"):
         self.path = path
         self.data = self._load()
         self._validate()
@@ -43,3 +43,7 @@ class UserConfig:
     @property
     def account(self):
         return self.data["account_data"]
+    
+    @property
+    def symbols(self):
+        return self.data["symbols"]

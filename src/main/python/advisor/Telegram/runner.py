@@ -1,7 +1,9 @@
+import asyncio
 import sys
 import signal
 import threading
 from .core import TelegramMessenger
+from advisor.Client.mt5Client import MetaTrader5Client
 from .utils.singleton import check_and_create_lock, cleanup_lock
 import logging
 
@@ -17,7 +19,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def run() -> TelegramMessenger | None:
+async def run(client: MetaTrader5Client) -> TelegramMessenger | None:
     """Main Telegram bot runner with graceful startup and shutdown."""
     if not check_and_create_lock():
         logger.info("🟡 Existing Telegram bot instance detected. Exiting.")
@@ -25,16 +27,7 @@ async def run() -> TelegramMessenger | None:
 
     logger.info("🚀 Launching Telegram bot runner...")
 
-    bot = TelegramMessenger()
-
-    # --- Stop callback (called on /stop command)
-    def stop_trading_bot():
-        logger.info("🧩 Callback: Stopping trading bot...")
-        # Example: Here you can safely terminate a trading process or background thread
-        # Example:
-        # trading_thread.stop()
-        # subprocess.Popen(['taskkill', '/F', '/IM', 'trade_bot.exe'])
-        pass
+    bot = TelegramMessenger(client)
 
     # --- Graceful shutdown handler (works on both Windows and Linux)
     shutting_down = threading.Event()
@@ -53,7 +46,8 @@ async def run() -> TelegramMessenger | None:
 
     # --- Run Telegram bot
     try:
-        bot.start_bot()
+        asyncio.run(bot._main())
+        logger.info("🚀 Telegram bot running...")
     except Exception as e:
         logger.info(f"❌ Telegram runner crashed: {e}")
         shutdown()

@@ -1,8 +1,7 @@
 import logging
-import os
-import signal
 import sys
 from threading import Event
+import signal
 
 from advisor.Trade.trade_engine import ExecutionProcess
 from advisor.Trade.trateState import TradeStateManager
@@ -16,6 +15,9 @@ from advisor.process.heartbeats import HeartbeatRegistry
 from advisor.process.process_engine import Supervisor
 from advisor.scheduler.process_sceduler import ProcessScheduler
 from advisor.utils.dataHandler import CacheManager
+from advisor.GUI.userInput import setUpWizard
+from advisor.Client.mt5Client import MetaTrader5Client
+from advisor.Client.symbols.symbol_watch import SymbolWatch
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,7 +28,7 @@ logging.basicConfig(
     ],
 )
 
-logger = logging.getLogger("MAIN")
+logger = logging.getLogger("Runner")
 
 
 class Main:
@@ -39,25 +41,34 @@ class Main:
         self.signal_store = SignalStore()
         self.trade_state = TradeStateManager()
         self.cache_handler = CacheManager()
-        self.orch = Supervisor(self.state_manager, self.heartbeats)
+        self.orch = Supervisor(self.shutdown_event, self.state_manager, self.heartbeats)
         self.scheduler.registry = self.orch.registry
         self.scheduler.gate.registry = self.orch.registry
 
         self.bot_state = self.state_manager.bot
-        self.client = None
-
+        self.symbol_watch = SymbolWatch(self.bot_state)
+        self.client = MetaTrader5Client()
+        self.objects = None
         self._load_configs()
+        self._connect_client()
         self._init_core_instances()
         self._register_signal_handlers()
 
     def _load_configs(self):
         try:
-            objects = self.bootstrap.initialize()
-            self.client = objects["client"]
-            logger.info("Bootstrap completed successfully.")
+            self.objects = self.bootstrap.initialize()
+            if hasattr(self.objects, "creds"):
+                self.objects = setUpWizard()
         except BootstrapError as e:
             logger.critical("Bootstrap failed: %s", e)
             raise
+
+    def _connect_client(self):
+        success = self.client.initialize(self.objects['creds'])
+        if success:
+            pass
+        else:
+            raise ConnectionError("failed to connect to MT5 server")
 
     def _init_core_instances(self):
         self.pipeline = pipelineProcess(
@@ -69,6 +80,7 @@ class Main:
             self.orch.registry,
             self.scheduler,
             self.state_manager,
+            self.symbol_watch,
         )
         self.backtest = backtestProcess(
             self.client,
@@ -80,9 +92,11 @@ class Main:
             self.bot_state,
             self.state_manager,
             self.scheduler,
+            self.symbol_watch,
         )
         self.strategy = strategyManager(
             self.client,
+            self.cache_handler,
             self.orch.shutdown,
             self.orch.heartbeats,
             self.orch.health_bus,
@@ -90,6 +104,7 @@ class Main:
             self.scheduler,
             self.signal_store,
             self.state_manager,
+            self.symbol_watch,
         )
         self.execution = ExecutionProcess(
             client=self.client,
@@ -101,6 +116,7 @@ class Main:
             shutdown_event=self.orch.shutdown,
             scheduler=self.scheduler,
             state_manager=self.state_manager,
+            symbol_watch=self.symbol_watch,
         )
 
         self.orch.register_process(name="pipeline", target=self.pipeline.start, depends=[])
@@ -121,15 +137,16 @@ class Main:
             self._restore_open_positions()
             self.state_manager.set_state(BotLifecycle.RUNNING)
             self.orch.start()
+            logger.info("All Engines Running")
         except Exception as e:
             logger.critical("Fatal startup error: %s", e, exc_info=True)
             self.state_manager.set_state(BotLifecycle.DEGRADED)
-            raise
+            self.shutdown()
+            raise RuntimeError(f"critical system fault: {e}")
 
     def shutdown(self, *args):
         logger.warning("Shutdown signal received.")
         self.shutdown_event.set()
-        self.orch.shutdown.set()
         self.orch.stop_all()
 
         close = getattr(self.client, "close", None)
@@ -138,38 +155,8 @@ class Main:
 
         self.state_manager.set_state(BotLifecycle.STOPPED)
         logger.info("System shutdown complete.")
-        sys.exit(0)
 
     def _register_signal_handlers(self):
         signal.signal(signal.SIGINT, self.shutdown)
         if hasattr(signal, "SIGTERM"):
             signal.signal(signal.SIGTERM, self.shutdown)
-
-
-def ensure_single_instance(lock_file):
-    if os.path.exists(lock_file):
-        logger.warning("Another instance of MA_DynamAdvisor is already running.")
-        return False
-    with open(lock_file, "w", encoding="utf-8") as f:
-        f.write(str(os.getpid()))
-    return True
-
-
-if __name__ == "__main__":
-    lock_file = os.path.splitext(os.path.basename(sys.argv[0]))[0] + ".lock"
-
-    try:
-        if not ensure_single_instance(lock_file):
-            sys.exit(1)
-        bot = Main()
-        bot.start()
-    except KeyboardInterrupt:
-        logger.info("Bot stopped manually.")
-    except Exception as e:
-        logger.exception("Processes stopped with: %s", e)
-    finally:
-        if os.path.exists(lock_file):
-            try:
-                os.remove(lock_file)
-            except Exception as e:
-                logger.warning("Could not remove lock file: %s", e)

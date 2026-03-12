@@ -20,10 +20,7 @@ def set_properties(project):
     project.set_property('coverage_break_build', False)  # Do not fail build on low test coverage
     project.set_property("dir_source_main_python", "src/main/python")
     project.set_property("dir_source_unittest_python", "src/tests/python")
-    
-    
-    
-    
+
     # DO NOT add 'unittest' here, it's built-in
     project.depends_on("pandas")
     project.depends_on("numpy")

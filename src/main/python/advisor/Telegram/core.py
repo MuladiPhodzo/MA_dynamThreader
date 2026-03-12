@@ -10,6 +10,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram import Update
 from .utils.env_loader import load_env
 
+import advisor.Client.mt5Client as Client
 # -------------------------
 # Logging Configuration
 # -------------------------
@@ -29,7 +30,8 @@ class TelegramMessenger:
 
     CHAT_ID_FILE = Path("telegram_chat.json")
 
-    def __init__(self, chat_id=None):
+    def __init__(self, client=Client.MetaTrader5Client, chat_id=None):
+        self.client = client
         self.BOT_TOKEN = load_env()
         if not self.BOT_TOKEN:
             raise ValueError("❌ TELEGRAM_BOT_TOKEN missing in .env")
@@ -114,18 +116,8 @@ class TelegramMessenger:
             await update.message.reply_text("❌ Chat ID not set. Use /start first.")
             return
 
-        info = self.get_account_info()
+        info = self.client.account_info
         await context.bot.send_message(chat_id=chat_id, text=f"📊 Account Status:\n{info}")
-
-    # -------------------------------------------------------------------------
-    # Account Info
-    # -------------------------------------------------------------------------
-    def get_account_info(self):
-        try:
-            import advisor.Client.mt5Client as Client
-            return Client.MetaTrader5Client.account_info
-        except Exception as e:
-            return f"⚠️ Error retrieving account info: {e}"
 
     # -------------------------------------------------------------------------
     # Lifecycle
@@ -162,46 +154,11 @@ class TelegramMessenger:
     async def _main(self):
         try:
             await self._initialize_bot()
-            self.loop = asyncio.get_running_loop()
-
-            # Cross-platform signal handling
-            if sys.platform != "win32":
-                def handle_signal():
-                    logger.info("🛑 Signal received — stopping bot...")
-                    asyncio.create_task(self._shutdown())
-
-                for sig in (signal.SIGINT, signal.SIGTERM):
-                    self.loop.add_signal_handler(sig, handle_signal)
-            else:
-                logger.info("⚠️ Signal handling disabled on Windows.")
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
             await self.app.run_polling(close_loop=True)
         except Exception as e:
             logger.exception(f"exception caught in telegram: {e}")
-
-    # -------------------------------------------------------------------------
-    # Public API
-    # -------------------------------------------------------------------------
-    # async def start_async(self):
-    #     await self._main()
-
-    def start_bot(self):
-        """Start the Telegram bot safely in any context (thread or main)."""
-        if self.app:
-            logger.info("⚠️ Telegram bot already running.")
-            return
-
-        logger.info("🚀 Starting Telegram bot...")
-
-        def run_in_thread():
-            try:
-                if asyncio.run(self._main()):
-                    logger.info("🚀 Telegram bot running...")
-            except Exception as e:
-                logger.info(f"❌ Telegram bot crashed: {e}")
-
-        # Always spawn a background thread (works on Windows + asyncio)
-        self.thread = threading.Thread(target=run_in_thread, daemon=True)
-        self.thread.start()
 
     async def stop_async(self):
         await self._shutdown()

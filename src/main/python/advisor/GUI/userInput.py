@@ -10,6 +10,7 @@ import json
 import os
 import logging
 from advisor.Trade.tradeStats import TradeStats as Stats
+from advisor.Client.mt5Client import MetaTrader5Client
 CONFIG_FILE = "user_config.json"
 
 # -------------------------
@@ -25,265 +26,17 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
-
-# ==========================================================
-#              TEXT REDIRECTOR (stdout -> GUI)
-# ==========================================================
-
-class TextRedirector:
-    """Redirects logger.info statements to both GUI and console."""
-
-    def __init__(self, log_window):
-        self.log_window = log_window
-        self.stdout = sys.stdout
-        sys.stdout = self  # redirect global output
-
-    def write(self, message):
-        message = message.strip()
-        if message:
-            try:
-                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                self.log_window.queue.put(f"[{timestamp}] {message}")
-            except Exception:
-                pass
-            self.stdout.write(message + "\n")
-            self.stdout.flush()
-
-    def flush(self):
-        self.stdout.flush()
-
-    def restore(self):
-        sys.stdout = self.stdout
-
-class QueueLoggerHandler(logging.Handler):
-    """Redirects Python logger messages to the Tkinter GUI queue."""
-    def __init__(self, log_window):
-        super().__init__()
-        self.log_window = log_window
-
-    def emit(self, record):
-        try:
-            msg = self.format(record)
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            formatted = f"[{timestamp}] {msg}"
-            self.log_window.queue.put(formatted)
-        except Exception:
-            self.handleError(record)
-
-# ==========================================================
-#                  LOG WINDOW (Child GUI)
-# ==========================================================
-class LogWindow:
-    """Window displaying live logs and bot summary."""
-
-    paused = False
-
-    def __init__(self, master: tb.Window):
-        self.window = tk.Toplevel(master) if master else tk.Window()
-        self.window.title("📢 Trading Advisor Bot — Running")
-        self.window.geometry("1440x840")
-
-        self.queue = queue.Queue()
-
-        self.stats = Stats()
-        self.stop_callback = None
-        self._build_main_layout()
-        self._build_live_log_panel()
-        self._build_summary_panel()
-
-        self.poll_queue()
-        self.redirector = TextRedirector(self)
-
-        # ✅ Attach the logger handler
-        self.logger_handler = QueueLoggerHandler(self)
-        formatter = logging.Formatter("%(levelname)s: %(message)s")
-        self.logger_handler.setFormatter(formatter)
-
-        root_logger = logging.getLogger()
-        root_logger.addHandler(self.logger_handler)
-        root_logger.setLevel(logging.INFO)
-
-    # ----------------------------------------------------------
-    # LAYOUT
-    # ----------------------------------------------------------
-    def _build_main_layout(self):
-        self.main_frame = tb.Frame(self.window)
-        self.main_frame.pack(fill="both", expand=True, padx=10, pady=10)
-        self.main_frame.columnconfigure(0, weight=2)
-        self.main_frame.columnconfigure(1, weight=1)
-        self.main_frame.rowconfigure(0, weight=1)
-
-    def _build_live_log_panel(self):
-        live_panel = tb.Frame(self.main_frame)
-        live_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
-
-        self.log_area_frame = tb.LabelFrame(
-            live_panel, text="📡 Live Logs", padding=10)
-        self.log_area_frame.pack(fill="both", expand=True)
-
-        self.log_area = scrolledtext.ScrolledText(
-            self.log_area_frame,
-            wrap=tk.WORD,
-            font=("Consolas", 10),
-            bg="#000000",
-            fg="#00ff11",
-            state="disabled",
-        )
-        self.log_area.pack(fill="both", expand=True)
-
-        # Buttons
-        btn_frame = tb.Frame(live_panel)
-        btn_frame.pack(pady=5)
-
-        ttk.Button(btn_frame, text="❌ Stop Bot", bootstyle=DANGER,
-                   command=self.quit).pack(side="left", padx=10)
-        self.pause_button = ttk.Button(
-            btn_frame,
-            text="⏸ Pause Bot",
-            bootstyle=INFO,
-            command=self.toggle_pause,
-        )
-        self.pause_button.pack(side="left", padx=10)
-
-    def _build_summary_panel(self):
-        summary_panel = tb.LabelFrame(
-            self.main_frame, text="📜 Trading Bot Summary", padding=10
-        )
-        summary_panel.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
-
-        self.summary_area = tk.Text(
-            summary_panel,
-            wrap=tk.WORD,
-            bg="#1e1e1e",
-            fg="#00ff00",
-            height=15,
-            state="disabled",
-        )
-        self.summary_area.pack(fill="both", expand=True)
-        self._load_sample_summary()
-
-        self.summary_container = tb.Frame(summary_panel)
-        self.summary_container.pack(fill="both", expand=True, pady=10)
-
-        self.add_collapsible_section("Change Rates", {
-            "Daily": f"{4}%",
-            "Weekly": "+7%",
-            "Monthly": "-5%",
-        })
-        self.add_collapsible_section("Charts", {
-            "Percentage Change": "+3.4%",
-        })
-
-    # ----------------------------------------------------------
-    # UTILITIES
-    # ----------------------------------------------------------
-    def _load_sample_summary(self):
-        summary_data = {
-            "Performance": {
-                "Total Trades Executed": self.stats.num_trades,
-                "Trades in Profit": self.stats.tradesInProfit,
-                "Trades in Loss": self.stats.loss,
-                "Account % Change": f"{self.stats.accountChangePercent}%",
-            },
-            "Risk Metrics": {
-                "Max Drawdown": f"{self.stats.drawdown}",
-                "Sharpe Ratio": f"{self.stats.sharpeRatio}",
-                "Win Rate": f"{self.stats.winRate}%",
-            },
-        }
-
-        self.summary_area.config(state="normal")
-        self.summary_area.delete("1.0", tk.END)
-        self.summary_area.insert(tk.END, "📊 Trading Performance Summary\n\n")
-
-        for key, values in summary_data.items():
-            self.summary_area.insert(tk.END, f"{key}:\n")
-            for metric, val in values.items():
-                self.summary_area.insert(tk.END, f"   - {metric}: {val}\n")
-            self.summary_area.insert(tk.END, "\n")
-        self.summary_area.config(state="disabled")
-
-    def add_collapsible_section(self, title, data: dict):
-        section_frame = tb.Frame(self.summary_container)
-        section_frame.pack(fill="x", pady=5)
-
-        toggle_btn = tb.Button(
-            section_frame, text=f"▶ {title}", bootstyle=INFO, width=20)
-        toggle_btn.pack(fill="x")
-
-        content_frame = tb.Frame(section_frame)
-        content_frame.pack(fill="x", padx=10, pady=2)
-        content_frame.visible = True
-
-        for key, value in data.items():
-            tb.Label(content_frame, text=f"{key}: {value}", anchor="w").pack(
-                fill="x")
-
-        def toggle():
-            if content_frame.visible:
-                content_frame.pack_forget()
-                toggle_btn.config(text=f"▼ {title}")
-            else:
-                content_frame.pack(fill="x", padx=10, pady=2)
-                toggle_btn.config(text=f"▶ {title}")
-            content_frame.visible = not content_frame.visible
-
-        toggle_btn.config(command=toggle)
-
-    # ----------------------------------------------------------
-    # LOG + CONTROL
-    # ----------------------------------------------------------
-    def poll_queue(self):
-        try:
-            while True:
-                message = self.queue.get_nowait()
-                self._append_log(message)
-            # end while
-        except queue.Empty:
-            pass
-        self.window.after(100, self.poll_queue)
-
-    def _append_log(self, message: str):
-        self.log_area.config(state="normal")
-        self.log_area.insert(tk.END, message + "\n")
-        self.log_area.see(tk.END)
-        self.log_area.config(state="disabled")
-
-    def toggle_pause(self):
-        LogWindow.paused = not LogWindow.paused
-        if LogWindow.paused:
-            self.pause_button.config(text="▶ Resume Bot", bootstyle=SUCCESS)
-            logger.info("⏸ Bot paused.")
-        else:
-            self.pause_button.config(text="⏸ Pause Bot", bootstyle=INFO)
-            logger.info("▶ Bot resumed.")
-
-    def quit(self):
-        logger.info("🛑 Stopping bot...")
-        UserGUI.should_run = False
-        root_logger = logging.getLogger()
-        root_logger.removeHandler(self.logger_handler)
-        self.window.destroy()
-        if hasattr(self, "stop_callback"):
-            self.set_stop_callback(self.stop_callback)
-
-        self.window.destroy()
-        sys.exit(0)
-
-    def set_stop_callback(self, callback):
-        """Allow main bot to inject a function to stop everything."""
-        self.stop_callback = callback
-
 # ==========================================================
 #                   MAIN SETUP WINDOW
 # ==========================================================
-class UserGUI:
+class setUpWizard:
     should_run = False
 
-    def __init__(self):
+    def __init__(self, client: MetaTrader5Client):
         self.root = tb.Window(themename="cosmo")
+        self.client = client
         self.root.title("🚀 EMA8t setup Wizard")
-        self.root.geometry("700x650")
+        self.root.geometry("500x400")
 
         self.user_data = {}
         self.bot_cfg = {}
@@ -311,6 +64,9 @@ class UserGUI:
         tb.Label(main_frame, text="Trading Bot Setup", font=(
             "Segoe UI", 16, "bold")).pack(pady=(0, 15))
 
+        #  ----------------------------------------------------------------------------
+        #  TRADING CONFIGS FRAME
+        #  ----------------------------------------------------------------------------
         trading_frame = tb.Labelframe(
             main_frame, text="⚙️ Trading Setup", padding=10)
         trading_frame.pack(fill="x", pady=10)
@@ -329,6 +85,13 @@ class UserGUI:
         self.rr.current(2)
         self._add_field(trading_frame, "RR Ratio", self.rr)
 
+        self.trailing_sl = tk.BooleanVar()
+        tb.Checkbutton(trading_frame, text="Trailing SL", variable=self.trailing_sl,
+                       bootstyle="info", ).pack(anchor="w", pady=(5, 10))
+
+        #  ----------------------------------------------------------------------------
+        #  ACCOUNT CREDS FRAME
+        #  ----------------------------------------------------------------------------
         account_frame = tb.Labelframe(
             main_frame, text="👤 Account Info", padding=10)
         account_frame.pack(fill="x", pady=10)
@@ -357,6 +120,7 @@ class UserGUI:
         self.status = tb.Label(self.root, text="Ready",
                                bootstyle=INFO, anchor="w")
         self.status.pack(side="bottom", fill="x")
+        self.root.mainloop()
 
     def _add_field(self, parent, label, widget: tk.Widget):
         frame = tb.Frame(parent)
@@ -477,10 +241,11 @@ class UserGUI:
                     "server": clean_value(self.server.get()),
                     "account_id": clean_value(int(self.account_id.get())),
                     "password": clean_value(self.password.get())},
-                "trade_configs": {
+                "trade_cfg": {
                     "volume": clean_value(self.volume.get()),
                     "pip_distance": clean_value(int(self.sl.get())),
-                    "rr_ratio": clean_value(self.rr.get())}
+                    "rr_ratio": clean_value(self.rr.get()),
+                    "trailing_sl": clean_value(self.trailing_sl.get())}
             }
 
             tmp_file = tempfile.NamedTemporaryFile("w", delete=False, dir=os.path.dirname(CONFIG_FILE))
@@ -514,13 +279,9 @@ class UserGUI:
             logger.info("🚀 Starting bot...")
             if self.remember_me.get():
                 self._save_user_config()
-            self.root.withdraw()
-            UserGUI.should_run = True
+            self.client.trade_cfg = self.user_data["trade_cfg"]
+            self.root.destroy()
             self.status.config(text="🚀 Bot Running...")
-            self.log_window = LogWindow(self.root)
-            self.log_window.set_stop_callback(self.stop_bot)
-            sys.stdout = self.log_window.redirector
-            sys.stderr = self.log_window.redirector
 
     def stop_bot(self):
         self.status.config(text="🛑 Bot Stopped", state='disabled')

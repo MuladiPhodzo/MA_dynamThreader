@@ -4,6 +4,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 import advisor.mt5_pipeline.core as core
+from advisor.Client.symbols.symbol_watch import SymbolWatch
 from advisor.core.health_bus import HealthBus
 from advisor.core.state import BotLifecycle, StateManager
 from advisor.scheduler.process_sceduler import ProcessScheduler
@@ -35,6 +36,7 @@ class pipelineProcess:
         registry: ResourceRegistry,
         scheduler: ProcessScheduler,
         state_manager: StateManager,
+        symbol_watch: SymbolWatch,
         interval=5,
     ):
         self.cache = cache_handler
@@ -42,6 +44,7 @@ class pipelineProcess:
         self.poll_interval = interval
         self.last_run: datetime | None = None
         self.state = state_manager
+        self.symbol_watch = symbol_watch
 
         self.registry = registry
         self.health_bus = health_bus
@@ -49,7 +52,7 @@ class pipelineProcess:
         self.stop_event = shutdown_event
         self.registry.register("market_data")
         self.scheduler = scheduler
-        self.pipeline = core.MarketDataPipeline(self.client, self.cache)
+        self.pipeline = core.MarketDataPipeline(self.client, self.cache, self.symbol_watch)
 
     async def _pipeline_cycle(self):
         now = datetime.now(timezone.utc)
@@ -60,7 +63,14 @@ class pipelineProcess:
         await self.pipeline.run_once()
         self.last_run = now
         self.registry.set_ready("market_data")
-        self.health_bus.update(self.name, "RUNNING", {"symbols": len(self.client.symbols)})
+        self.health_bus.update(
+            self.name,
+            "RUNNING",
+            {
+                "symbols": len(self.symbol_watch.active_symbols),
+                "telemetry": self.symbol_watch.snapshot(),
+            },
+        )
 
     async def _run_loop(self):
         while not self.stop_event.is_set():
@@ -72,7 +82,7 @@ class pipelineProcess:
                 heartbeats=self.heartbeats,
                 timeout=60,
             )
-            await asyncio.sleep(1)
+            await asyncio.sleep(self.poll_interval)
 
     def start(self):
         try:

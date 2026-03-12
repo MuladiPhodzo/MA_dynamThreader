@@ -8,7 +8,7 @@ import threading
 import time
 import matplotlib.pyplot as plt
 
-from advisor.utils.locks import THREAD_LOCK, FILE_LOCK, PROCESS_LOCK
+from advisor.utils.cache_handler import CacheManager
 import pandas as pd
 import datetime
 from typing import Any, Dict, Optional
@@ -27,119 +27,63 @@ logging.basicConfig(
 
 logger = logging.getLogger("Data_store")
 
+class DataHandler:
 
-class CacheManager:
-    def __init__(self, ttl=180):
-        self.ttl = ttl
-        self.process_lock = PROCESS_LOCK
-        self.lock = THREAD_LOCK
-        self.memory = {}
-        self.timestamps = {}
+    def __init__(self, symbol: str, strategy: str, cache: CacheManager, max_bars: int = 3000):
 
-        # background serializer
-        self.auto_save_thread = threading.Thread(target=self._auto_save, daemon=True)
-        self.auto_save_thread.start()
-
-    # Store any value
-    def set(self, key, value):
-        with self.process_lock:
-            with self.lock:
-                self.memory[key] = value
-                self.timestamps[key] = time.time()
-
-    def set_atomic(self, key, value):
-        with self.process_lock:
-            with self.lock:
-                tmp_key = f"{key}.__tmp__"
-                self.set(tmp_key, value)
-                self.rename(tmp_key, key)
-
-    # Retrieve and check TTL
-    def get(self, key) -> dict:
-        with self.process_lock:
-            with self.lock:
-                if key not in self.memory:
-                    return None
-
-                if time.time() - self.timestamps.get(key, 0) > self.ttl:
-                    # expired
-                    del self.memory[key]
-                    return None
-
-                return self.memory[key]
-
-    def get_by_group(self, group_val: str):
-        with self.process_lock:
-            with self.lock:
-                cache = {}
-                for key, data in self.memory.items():
-                    if group_val in key:
-                        if time.time() - self.timestamps.get(key, 0) > self.ttl:
-                            # expired
-                            del self.memory[key]
-                        else:
-                            cache[key] = data
-                return cache
-
-    def snapshot(self, ts):
-        """Return multi-TF snapshot at timestamp"""
-        with self.process_lock:
-            with self.lock:
-                snap = {}
-                for tf, df in self.memory.items():
-                    if ts in df.index:
-                        snap[tf] = df.loc[ts]
-                return snap
-
-class dataHandler:
-    def __init__(self, symbol, strategy: str, cache: CacheManager, max_bars=3000):
         self.symbol = symbol
-        self.dir_name = os.path.dirname(f"{self.symbol}_{strategy}")
-        self.cache_handler = cache
-
-        self.data : Dict[str, pd.DataFrame] = {}
-        self.fetch()
-        self.all_timestamps = set(
-            self.all_timestamps.update(df)
-            for tf, df in self.data.items())
-
+        self.strategy = strategy
+        self.cache = cache
         self.max_bars = max_bars
 
-        self.process_lock = PROCESS_LOCK
-        self.thread_lock = THREAD_LOCK
-        self.file_lock = FILE_LOCK
+        self.data: Dict[str, pd.DataFrame] = {}
+        self.all_timestamps: set = set()
+
+        self.lock = threading.RLock()
+
+        self.base_dir = Path("data") / strategy / symbol
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+
+        # start background workers
+        self.fetch_thread = threading.Thread(
+            target=self._fetch_loop,
+            daemon=True
+        )
+
+        self.save_thread = threading.Thread(
+            target=self._auto_save,
+            daemon=True
+        )
+
+        self.fetch_thread.start()
+        self.save_thread.start()
 
     def update(self, tf: str, df: pd.DataFrame):
-        """
-        Append new rows into timeframe data instead of replacing.
-        Deduplicates by index, sanitizes, trims, and updates timestamps.
-        """
         if df is None or df.empty:
             return
 
         df = self._sanitize(df)
 
-        # If timeframe does not exist yet → set directly
-        if tf not in self.data or self.data[tf] is None:
-            self.data[tf] = self._trim(df)
-            self.update_timestamps(df)
-            return
+        with self.lock:
 
-        existing = self.data[tf]
+            existing = self.data.get(tf)
 
-        # Append only NEW rows (index-based)
-        new_rows = df.loc[~df.index.isin(existing.index)]
+            if existing is None:
+                self.data[tf] = self._trim(df)
+                self.all_timestamps.update(df.index)
+                return
 
-        if new_rows.empty:
-            return
+            new_rows = df.loc[~df.index.isin(existing.index)]
 
-        # Concatenate + sanitize again (cheap & safe)
-        combined = pd.concat([existing, new_rows])
-        combined = self._sanitize(combined)
-        combined = self._trim(combined)
+            if new_rows.empty:
+                return
 
-        self.data[tf] = combined
-        self.update_timestamps(new_rows)
+            combined = pd.concat([existing, new_rows])
+            combined = self._sanitize(combined)
+
+            self.data[tf] = self._trim(combined)
+
+            self.all_timestamps.update(new_rows.index)
 
     def add_trade(self, data: pd.DataFrame):
         self.trades.add(pd.DataFrame(data))
@@ -356,20 +300,37 @@ class dataHandler:
                 except Exception:
                     logger.exception(f"Failed deleting cache for {symbol}")
 
-    # refresh data every 5 minutes
-    def fetch(self):
+    def _fetch_loop(self):
         while True:
-            with self.process_lock:
-                with self.lock:
-                    data = self.cache_handler.get(self.symbol)
-                    self.set_data(data)
-                    time.sleep(60 * 15)
 
-    # Saves every 5 minutes
+            try:
+
+                data = self.cache.get(self.symbol)
+
+                if data:
+                    self.set_data(data)
+
+            except Exception:
+                logger.exception("Cache fetch failed")
+
+            time.sleep(300)
+
     def _auto_save(self):
         while True:
-            time.sleep(60 * 15)
-            self.save_data_toCSVFile()
+            time.sleep(900)
+            try:
+                for tf, df in self.data.items():
+
+                    path = self.base_dir / f"{tf}.csv"
+
+                    df.tail(1).to_csv(
+                        path,
+                        mode="a",
+                        header=not path.exists()
+                    )
+
+            except Exception:
+                logger.exception("Auto save failed")
 
     # ---------------- internal paths ---------------- #
     def _symbol_dir(self, symbol):

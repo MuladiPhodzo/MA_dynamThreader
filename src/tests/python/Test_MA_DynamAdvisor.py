@@ -63,29 +63,6 @@ class TestLockFileIntegration(unittest.TestCase):
         """Clean up temp directory after test."""
         self.temp_dir.cleanup()
 
-    # def test_lock_file_lifecycle(self):
-    #     """Ensure the lock file is created when bot starts and removed when stopped."""
-    #     bot = BotProcess(self.script_path)
-
-    #     # Start the simulated bot
-    #     bot.start()
-    #     time.sleep(2)  # Give the process time to start
-
-    #     # Check that the lock file was created
-    #     self.assertTrue(self.lock_file.exists(), "❌ Lock file was not created.")
-
-    #     # Stop the bot process
-    #     bot.stop()
-    #     time.sleep(2)  # Allow cleanup time
-
-    #     # Verify lock file cleanup
-    #     self.assertFalse(self.lock_file.exists(), "❌ Lock file still exists after bot stopped.")
-
-    #     # Read output for debugging
-    #     stdout, stderr = bot.process.communicate()
-    #     logger.info(stdout.decode())
-    #     logger.info(stderr.decode())
-
 
 if __name__ == "__main__":
     unittest.main()

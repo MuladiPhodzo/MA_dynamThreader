@@ -148,7 +148,7 @@ Main            ▼                      ┌────────────
 |                           |       |  |  | 2. ingest market data                               |                                      |
 |                           |       |  |  | 3. Normalize data                                   |                                      |
 |---------------------------|       |  |  | 4. cache all symbol data for other process          |───────────┐                          |
-|                           |       |  |  |                                                     |           │ all symbols              |                                     
+|                           |       |  |  |                                                     |           │ all symbols              |
 | - bot state               |       |  |  └─────────────────────────────────────────────────────┘           |                          |
 | - settings                |───────┘  |                                                                    |                          |
 | - process lifecycle       | start 1  |                                      Process2: symbol backtest     ▼                          |
@@ -162,8 +162,8 @@ Main            ▼                      ┌────────────
 |                           |          |                                      |       ├── backtest all symbols                      |  |
 |                           |          |                                      |       ├── score symbols                             |  |
 |                           |          |                                      |       └── activate top performers                   |  |
-|                           |          |                                      |                                                     |  |       
-|                           |          |                                      └─────────────────────────────────────────────────────┘  | 
+|                           |          |                                      |                                                     |  |
+|                           |          |                                      └─────────────────────────────────────────────────────┘  |
 |                           |─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 |                           | start 4  |                                              |                                                |                          |
 |                           |          |                                              |                                                |                          |
@@ -171,9 +171,9 @@ Main            ▼                      ┌────────────
 |                           |          |                                              |                                                |                          |
 |                           |          |                                              |                                                |                          |
 |                           |          |      Process3: Multi strategy thread Handler ▼                                                |                          |
-|                           |          |     ┌────────────────────────────────────────────────────────────┐                            |                          |         
+|                           |          |     ┌────────────────────────────────────────────────────────────┐                            |                          |
 |                           |          |     | strategy: MA                                               |                            |                          |
-|                           |          |     | └──Thread: EURUSD                                          |                            |                          |        
+|                           |          |     | └──Thread: EURUSD                                          |                            |                          |
 |                           |          |     |    └── DataHandler(EURUSD_data) > from cache_handler       |                            |                          |
 |                           |          |     |            ┌─────────────────────┐                         |                            |                          |
 |                           | start 3  |     |            | Symbol Thread       |────────────────────┐    |                            |                          |
@@ -254,7 +254,7 @@ Main            ▼                      ┌────────────
 
 - MetaTrader5 terminal **installed**
 - good **connectivity**
-- Algo tradinig **enabled**
+- Algo tradinig **enabled** on the Metatrader terminal
 
 ---
 
@@ -266,7 +266,7 @@ Main            ▼                      ┌────────────
 ├───────────┬─────────────────────────────────┤
 │ Sidebar   │ Main Content Area               │
 │           │                                 │
-│ - Charts  │  (Active Panel)                 │
+│ - Account │  (Active Panel)                 │
 │ - Symbols │                                 │
 │ - Bot     │                                 │
 │ - Logs    │                                 │

@@ -12,6 +12,7 @@ from advisor.indicators.signal_store import SignalStore
 from advisor.scheduler.process_sceduler import ProcessScheduler
 from advisor.scheduler.requirements import ProcessRequirement
 from advisor.scheduler.resource_registry import ResourceRegistry
+from advisor.Client.symbols.symbol_watch import SymbolWatch
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,13 +37,14 @@ class ExecutionProcess:
         self,
         client,
         signal_store: SignalStore,
-        state: TradeStateManager,
         registry: ResourceRegistry,
         health_bus: HealthBus,
         heartbeats: dict,
         shutdown_event,
         scheduler: ProcessScheduler,
         state_manager: StateManager,
+        symbol_watch: SymbolWatch,
+        state: TradeStateManager | None = None,
         interval=2,
     ):
         self.client = client
@@ -53,7 +55,8 @@ class ExecutionProcess:
         self.stop_event = shutdown_event
         self.scheduler = scheduler
         self.interval = interval
-        self.trade_state = state
+        self.symbol_watch = symbol_watch
+        self.trade_state = state or TradeStateManager(self.client)
         self.state_manager = state_manager
         self.processed_signals = set()
 
@@ -88,7 +91,7 @@ class ExecutionProcess:
 
     async def _execution_cycle(self):
         executed = 0
-        for symbol in list(getattr(self.client, "symbols", [])):
+        for symbol in self.symbol_watch.active_symbol_names():
             signal = self.signal_store.get_latest(symbol)
             if not signal:
                 continue
@@ -112,9 +115,18 @@ class ExecutionProcess:
                 self.trade_state.register_open(trade)
                 self.risk_manager.register_trade_open()
                 self.processed_signals.add(signal_id)
+                self.symbol_watch.mark_trade(signal.symbol)
                 executed += 1
             except Exception as e:
                 logger.error("%s trade failed: %s", symbol, e, exc_info=True)
+                self.symbol_watch.mark_error(symbol, f"trade failed: {e}")
 
         self.heartbeats[self.name] = datetime.now(timezone.utc).isoformat()
-        self.health_bus.update(self.name, "RUNNING", {"executed": executed})
+        self.health_bus.update(
+            self.name,
+            "RUNNING",
+            {
+                "executed": executed,
+                "telemetry": self.symbol_watch.snapshot(),
+            },
+        )

@@ -5,7 +5,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from multiprocessing import Event, Manager, Process
+from multiprocessing import Manager, Process
 from pathlib import Path
 
 from advisor.core import dependency_graph, health_bus
@@ -40,8 +40,8 @@ class Supervisor:
     MAX_RESTARTS = 5
     HEARTBEAT_TIMEOUT = timedelta(seconds=30)
 
-    def __init__(self, state_manager: StateManager, heartbeats: HeartbeatRegistry):
-        self.shutdown = Event()
+    def __init__(self, shutdown, state_manager: StateManager, heartbeats: HeartbeatRegistry):
+        self.shutdown = shutdown
         self.manager = Manager()
         self.state_manager = state_manager
 
