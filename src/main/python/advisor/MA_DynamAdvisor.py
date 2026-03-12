@@ -35,6 +35,12 @@ logger = logging.getLogger("Runner")
 class Main:
     def __init__(self):
         self.shutdown_event = Event()
+        self.process_events = {
+            "pipeline": Event(),
+            "backtest": Event(),
+            "strategy": Event(),
+            "execution": Event(),
+        }
         self.bootstrap = SystemBootstrap()
         self.state_manager = StateManager()
         self.scheduler = ProcessScheduler(None)
@@ -80,7 +86,7 @@ class Main:
         self.pipeline = pipelineProcess(
             self.client,
             self.cache_handler,
-            self.orch.shutdown,
+            self.process_events["pipeline"],
             self.orch.heartbeats,
             self.orch.health_bus,
             self.orch.registry,
@@ -94,7 +100,7 @@ class Main:
             self.orch.registry,
             self.orch.health_bus,
             self.orch.heartbeats,
-            self.orch.shutdown,
+            self.process_events["backtest"],
             self.bot_state,
             self.state_manager,
             self.scheduler,
@@ -103,7 +109,7 @@ class Main:
         self.strategy = strategyManager(
             self.client,
             self.cache_handler,
-            self.orch.shutdown,
+            self.process_events["strategy"],
             self.orch.heartbeats,
             self.orch.health_bus,
             self.orch.registry,
@@ -119,7 +125,7 @@ class Main:
             registry=self.orch.registry,
             health_bus=self.orch.health_bus,
             heartbeats=self.orch.heartbeats,
-            shutdown_event=self.orch.shutdown,
+            shutdown_event=self.process_events["execution"],
             scheduler=self.scheduler,
             state_manager=self.state_manager,
             symbol_watch=self.symbol_watch,
@@ -164,6 +170,8 @@ class Main:
     def shutdown(self, *args):
         logger.warning("Shutdown signal received.")
         self.shutdown_event.set()
+        for ev in self.process_events.values():
+            ev.set()
         self.orch.stop_all()
 
         close = getattr(self.client, "close", None)
