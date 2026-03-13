@@ -39,7 +39,7 @@ class ManagedProcess:
 class Supervisor:
     STATE_FILE = Path("runtime/supervisor_state.json")
     MAX_RESTARTS = 5
-    HEARTBEAT_TIMEOUT = timedelta(seconds=30)
+    HEARTBEAT_TIMEOUT = timedelta(minutes=1)
 
     def __init__(self, shutdown, state_manager: StateManager, heartbeats: HeartbeatRegistry):
         self.shutdown = shutdown
@@ -97,6 +97,7 @@ class Supervisor:
         self.processes[name] = proc
         self.restart_counts.setdefault(name, 0)
         self.dep_graph.add(name, depends or [])
+        logger.info("Registered process: %s (depends on: %s)", name, depends or [])
 
     def get_process_snapshot(self) -> dict[str, dict]:
         snapshot = {}
