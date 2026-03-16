@@ -31,7 +31,7 @@ EXECUTION_REQS = [
 
 
 class ExecutionProcess:
-    name = "Execution"
+    name = "execution"
 
     def __init__(
         self,

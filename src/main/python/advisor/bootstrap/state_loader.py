@@ -4,7 +4,7 @@ import os
 
 class StateStore:
 
-    def __init__(self, path="state.json"):
+    def __init__(self, path="bot_state.json"):
         self.path = path
         self.state = self._load()
 

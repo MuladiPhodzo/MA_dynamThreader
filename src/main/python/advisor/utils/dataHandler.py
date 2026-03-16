@@ -85,9 +85,6 @@ class DataHandler:
 
             self.all_timestamps.update(new_rows.index)
 
-    def add_trade(self, data: pd.DataFrame):
-        self.trades.add(pd.DataFrame(data))
-
     def set_data(self, data: dict):
         for tf, df in data.items():
             self.update(tf, df)

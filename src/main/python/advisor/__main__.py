@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+import signal
 
 from advisor.MA_DynamAdvisor import Main
 
@@ -17,7 +18,13 @@ logger = logging.getLogger("MAIN")
 
 def main():
     bot = Main()
+    _register_signal_handlers(bot.shutdown)
     bot.start()
+
+def _register_signal_handlers(shutdown_func):
+    signal.signal(signal.SIGINT, shutdown_func)
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, shutdown_func)
 
 def ensure_single_instance(lock_file):
     if os.path.exists(lock_file):
@@ -35,6 +42,7 @@ if __name__ == "__main__":
         if not ensure_single_instance(lock_file):
             raise RuntimeError("Another instance is running")
         logger.log(level=1, msg="Running bot module")
+        _register_signal_handlers(Main)
         bot = main()
     except KeyboardInterrupt:
         logger.info("Bot stopped manually.")

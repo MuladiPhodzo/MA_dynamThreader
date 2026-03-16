@@ -51,7 +51,3 @@ class UserConfig:
     @property
     def account(self):
         return self.data["account_data"]
-    
-    @property
-    def symbols(self):
-        return self.data["symbols"]

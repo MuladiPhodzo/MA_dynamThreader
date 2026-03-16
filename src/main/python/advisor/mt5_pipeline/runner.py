@@ -24,7 +24,7 @@ logger = logging.getLogger("MT5-Pipeline")
 
 
 class pipelineProcess:
-    name = "Pipeline"
+    name = "pipeline"
 
     def __init__(
         self,

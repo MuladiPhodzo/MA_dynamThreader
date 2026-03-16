@@ -11,7 +11,7 @@ import os
 import logging
 from advisor.Trade.tradeStats import TradeStats as Stats
 from advisor.Client.mt5Client import MetaTrader5Client
-CONFIG_FILE = "user_config.json"
+CONFIG_FILE = "configs.json"
 
 # -------------------------
 # Logging Configuration
@@ -25,7 +25,7 @@ logging.basicConfig(
     ],
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("SetUp Wizard")
 # ==========================================================
 #                   MAIN SETUP WINDOW
 # ==========================================================
@@ -36,19 +36,19 @@ class setUpWizard:
         self.root = tb.Window(themename="cosmo")
         self.client = client
         self.root.title("🚀 EMA8t setup Wizard")
-        self.root.geometry("500x400")
+        self.root.geometry("400x350")
 
         self.user_data = {}
         self.bot_cfg = {}
         self.log_window = None
         self._build_main_ui()
-        if CONFIG_FILE and os.path.exists(CONFIG_FILE):
-            proceed = self.prompt_window(
-                "Existing configuration found. run previous configuration?")
-            if proceed:
-                self._load_user_config()
-                self._sync_ui_to_user_data()
-                self.start_bot()
+        # if CONFIG_FILE and os.path.exists(CONFIG_FILE):
+        #     proceed = self.prompt_window(
+        #         "Existing configuration found. run previous configuration?")
+        #     if proceed:
+        #         self._load_user_config()
+        #         self._sync_ui_to_user_data()
+        #         self.start_bot()
 
     def pop_up_error(self, message: str):
         messagebox.showerror("Input Error", message)
@@ -145,13 +145,17 @@ class setUpWizard:
                 raise ValueError("Server and Password cannot be empty.")
 
             self.user_data = {
-                "volume": volume,
-                "sl": sl,
-                "rr_ratio": rr,
-                "tp": self.handleRR(),
-                "server": server,
-                "account_id": account_id,
-                "password": password,
+                "creds": {
+                    "server": server,
+                    "account_id": account_id,
+                    "password": password,
+                },
+                "trade_cfg": {
+                    "volume": volume,
+                    "pip_distance": sl,
+                    "rr_ratio": rr,
+                    "trailing_sl": bool(self.trailing_sl.get()),
+                },
             }
             return True
         except Exception as e:
@@ -162,13 +166,17 @@ class setUpWizard:
         """Synchronize widget values back to self.user_data."""
         try:
             self.user_data = {
-                "volume": self.volume.get(),
-                "sl": self.sl.get(),
-                "rr_ratio": self.rr.get(),
-                "tp": self.handleRR(),
-                "server": self.server.get(),
-                "account_id": int(self.account_id.get()),
-                "password": self.password.get(),
+                "creds": {
+                    "server": self.server.get(),
+                    "account_id": int(self.account_id.get()),
+                    "password": self.password.get(),
+                },
+                "trade_cfg": {
+                    "volume": float(self.volume.get()),
+                    "pip_distance": int(self.sl.get()),
+                    "rr_ratio": self.rr.get(),
+                    "trailing_sl": bool(self.trailing_sl.get()),
+                },
             }
         except Exception as e:
             logger.info(f"⚠️ Failed to sync UI to user_data: {e}")
@@ -179,26 +187,24 @@ class setUpWizard:
     def _load_user_config(self):
         """Load saved user configuration and populate GUI widgets."""
         if not os.path.exists(CONFIG_FILE):
-            logger.info("⚠️ No config file to load.")
+            logger.info("No config file to load.")
             return
 
         try:
             with open(CONFIG_FILE, "r") as f:
                 data = json.load(f)
-            configs: dict = data.get("configs")
-            creds: dict = data.get("creds")
+            trade_cfg: dict = data.get("trade_cfg", {})
+            creds: dict = data.get("creds", {})
 
-            # Ensure saved values are clean
             cleaned_data = {
-                "volume": str(configs.get("trade_configs")("volume", "0.01")),
-                "sl_distance": int(configs.get("trade_configs")("pip_distance", 200)),
-                "rr_ratio": str(configs.get("trade_configs")("rr_ratio", "1:2")),
-                "server": str(creds.get("creds")("server", "")),
-                "account_id": str(creds.get("creds")("account_id", "")),  # convert int → string for GUI
-                "password": str(creds.get("creds")("password", "")),
+                "volume": str(trade_cfg.get("volume", "0.01")),
+                "sl_distance": int(trade_cfg.get("pip_distance", 200)),
+                "rr_ratio": str(trade_cfg.get("rr_ratio", "1:2")),
+                "server": str(creds.get("server", "")),
+                "account_id": str(creds.get("account_id", "")),
+                "password": str(creds.get("password", "")),
             }
 
-            # Auto-detect widget type (StringVar or Entry)
             def set_val(widget, value):
                 if hasattr(widget, "set"):
                     widget.set(value)
@@ -213,15 +219,27 @@ class setUpWizard:
             set_val(self.account_id, cleaned_data["account_id"])
             set_val(self.password, cleaned_data["password"])
 
-            # Persist loaded data internally
-            self.user_data = cleaned_data
+            self.user_data = {
+                "creds": {
+                    "server": cleaned_data["server"],
+                    "account_id": int(cleaned_data["account_id"]),
+                    "password": cleaned_data["password"],
+                },
+                "trade_cfg": {
+                    "volume": float(cleaned_data["volume"]),
+                    "pip_distance": int(cleaned_data["sl_distance"]),
+                    "rr_ratio": cleaned_data["rr_ratio"],
+                    "trailing_sl": bool(self.trailing_sl.get()),
+                },
+            }
 
-            logger.info("✅ User config loaded successfully.")
+            logger.info("User config loaded successfully.")
 
         except Exception as e:
-            logger.info(f"❌ Failed to load config: {e}")
+            logger.info(f"Failed to load config: {e}")
 
     def _save_user_config(self):
+
         import tempfile
         import shutil
         import re

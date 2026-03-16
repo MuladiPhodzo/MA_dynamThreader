@@ -31,7 +31,6 @@ class MovingAverageCrossover:
         self,
         symbol: SymbolState,
         client: MetaTrader5Client,
-        backtest: bool,
         cache: CacheManager,
         fast_period=50,
         slow_period=200,
@@ -51,7 +50,7 @@ class MovingAverageCrossover:
         self.slow_period = slow_period
         self.pip_distance = pip_distance
         self.cache = cache
-        self.backtest: bool = backtest
+        self.backtest: bool = False
 
         self.executor = ThreadPoolExecutor(max_workers=20)
         self.all_timestamps = set()
@@ -716,5 +715,22 @@ class MovingAverageCrossover:
         signal = self.identify_Trend_Alignment()
         return {"sig": signal, "frame": frame}
 
-    def __call__(self):
-        return self.run()
+    # ------------------------------------------------------
+    # Callable Strategy Interface
+    # ------------------------------------------------------
+    def __call__(self, backtest: bool | None = None):
+        """
+        Allows the strategy instance to be executed like a function.
+
+        Example:
+            strategy()
+            strategy(backtest=True)
+        """
+
+        if backtest is not None:
+            self.backtest = backtest
+
+        try:
+            return self.run()
+        finally:
+            self.executor.shutdown(wait=True)

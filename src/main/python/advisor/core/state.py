@@ -93,6 +93,7 @@ class StateManager:
 
     def set_state(self, state: BotLifecycle):
         self._lifecycle.value = state.value
+        self.bot.state = state
 
     def get_state(self) -> BotLifecycle:
         return BotLifecycle(self._lifecycle.value)
@@ -127,6 +128,30 @@ class StateManager:
     def load_bot_state() -> BotState:
 
         with STATE_LOCK:
+            def _coerce_bool(value: Any) -> bool:
+                if isinstance(value, bool):
+                    return value
+                if isinstance(value, (int, float)):
+                    return bool(value)
+                if isinstance(value, str):
+                    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+                return False
+
+            def _build_symbols(symbol_map: dict[str, Any]) -> list[SymbolState]:
+                return [
+                    SymbolState(
+                        symbol=k,
+                        strategies=[],
+                        score=v.get("score", 0.0) if isinstance(v, dict) else 0.0,
+                        last_backtest=StateManager._parse_dt(
+                            v.get("last_backtest") if isinstance(v, dict) else None
+                        ),
+                        enabled=_coerce_bool(v.get("enabled")) if isinstance(v, dict) else False,
+                        meta=v.get("meta", {}) if isinstance(v, dict) else {},
+                    )
+                    for k, v in (symbol_map or {}).items()
+                ]
+
             if STATE_FILE.exists() and STATE_FILE.is_dir():
                 try:
                     STATE_FILE.rmdir()
@@ -136,6 +161,13 @@ class StateManager:
             if not STATE_FILE.exists():
                 STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
                 new = BotState()
+                try:
+                    from advisor.bootstrap.config_loader import UserConfig
+
+                    cfg = UserConfig()
+                    new.symbols = _build_symbols(cfg.symbols)
+                except Exception:
+                    pass
                 StateManager.save_bot_state(new)
                 logging.warning("State file not found. Creating fresh state.")
                 return new
@@ -144,16 +176,25 @@ class StateManager:
                 with open(STATE_FILE, "r") as f:
                     raw = json.load(f)
 
-                symbols = [
-                    SymbolState(
-                        symbol=k,
-                        strategies=[],
-                        score=v.get("score", 0.0),
-                        last_backtest=StateManager._parse_dt(v.get("last_backtest")),
-                        enabled=v.get("enabled", False)
-                    )
-                    for k, v in raw.get("symbols", {}).items()
-                ]
+                symbols = _build_symbols(raw.get("symbols", {}))
+                if not symbols:
+                    try:
+                        from advisor.bootstrap.config_loader import UserConfig
+
+                        cfg = UserConfig()
+                        symbols = _build_symbols(cfg.symbols)
+                        raw["symbols"] = cfg.symbols
+                        tmp_state = BotState(
+                            version=raw.get("version", "1.0"),
+                            last_backtest_run=StateManager._parse_dt(raw.get("last_backtest_run")),
+                            next_backtest_run=StateManager._parse_dt(raw.get("next_backtest_run")),
+                            symbols=symbols,
+                            backtest_running=raw.get("backtest_running", False),
+                            live_trading_enabled=raw.get("live_trading_enabled", True),
+                        )
+                        StateManager.save_bot_state(tmp_state)
+                    except Exception:
+                        pass
 
                 return BotState(
                     version=raw.get("version", "1.0"),
@@ -187,7 +228,8 @@ class StateManager:
                     sym.symbol: {
                         "score": sym.score,
                         "last_backtest": StateManager._serialize_dt(sym.last_backtest),
-                        "enabled": sym.enabled
+                        "enabled": sym.enabled,
+                        "meta": sym.meta or {},
                     }
                     for sym in state.symbols
                 }

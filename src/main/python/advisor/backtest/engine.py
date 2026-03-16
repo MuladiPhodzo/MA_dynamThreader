@@ -12,7 +12,7 @@ from advisor.scheduler.requirements import ProcessRequirement
 from advisor.scheduler.resource_registry import ResourceRegistry
 from advisor.utils.dataHandler import CacheManager
 from advisor.Client.symbols.symbol_watch import SymbolWatch
-
+from advisor.backtest.core import Backtest
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -24,12 +24,12 @@ logging.basicConfig(
 
 logger = logging.getLogger("Backtest")
 
-STATE_FILE = Path("config.json")
+STATE_FILE = Path("bot_state.json")
 BACKTEST_REQS = [ProcessRequirement("market_data", max_age=timedelta(minutes=10))]
 
 
 class backtestProcess:
-    name = "Backtest"
+    name = "backtest"
 
     def __init__(
         self,
@@ -46,6 +46,8 @@ class backtestProcess:
     ):
         self.client = client
         self.cache = cache_handler
+        self.backtest = Backtest(self.client, self.cache, self.symbol_watch)
+        self.symbol_watch = symbol_watch
         self.registry = registry
         self.health_bus = health_bus
         self.heartbeats = heartbeats
@@ -53,7 +55,6 @@ class backtestProcess:
         self.scheduler = scheduler
         self.bot_state = bot_state
         self.state_manager = state_manager
-        self.symbol_watch = symbol_watch
 
         self.registry.register("backtest_data")
         self.registry.register("symbols")
@@ -63,13 +64,13 @@ class backtestProcess:
             return None
         try:
             raw = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-            ts = raw.get("last_backtest")
+            ts = raw.get("last_backtest_run")
             return datetime.fromisoformat(ts) if ts else None
         except Exception:
             return None
 
     def _save_last_backtest_time(self, ts: datetime):
-        STATE_FILE.write_text(json.dumps({"last_backtest": ts.isoformat()}, indent=2), encoding="utf-8")
+        STATE_FILE.write_text(json.dumps({"last_backtest_run": ts.isoformat()}, indent=2), encoding="utf-8")
 
     async def _backtest_cycle(self):
         now = datetime.now(timezone.utc)
@@ -78,29 +79,44 @@ class backtestProcess:
             return
 
         self.state_manager.set_state(BotLifecycle.RUNNING_BACKTEST)
-        symbols = self.symbol_watch.active_symbol_names()
-
-        for sym in symbols:
-            data = await asyncio.to_thread(self.client.get_multi_tf_data, sym)
-            if data:
-                self.cache.set(sym, data)
-                self.symbol_watch.mark_data_fetch(sym)
-            else:
-                self.symbol_watch.mark_error(sym, "backtest fetch failed")
-
+        self.backtest.__run_loop()
         self.registry.set_ready("backtest_data")
         self.registry.set_ready("symbols")
         self._save_last_backtest_time(now)
         self.state_manager.last_backtest_run = now
+        StateManager.save_bot_state(self.state_manager.bot)
+        self._activate_symbols_after_backtest()
         self.state_manager.set_state(BotLifecycle.RUNNING)
         self.health_bus.update(
             self.name,
             "RUNNING",
             {
-                "active_symbols": len(symbols),
+                "active_symbols": len(self.symbol_watch.all_symbols),
                 "telemetry": self.symbol_watch.snapshot(),
             },
         )
+
+    def _activate_symbols_after_backtest(self) -> None:
+        # Only activate if none are currently enabled.
+        if any(sym.enabled for sym in self.state_manager.bot.symbols):
+            return
+
+        activated = []
+        for sym in self.state_manager.bot.symbols:
+            desired = False
+            if isinstance(sym.meta, dict):
+                desired = bool(sym.meta.get("desired_enabled", False))
+            if desired:
+                sym.enabled = True
+                activated.append(sym.symbol)
+
+        if activated:
+            StateManager.save_bot_state(self.state_manager.bot)
+            self.symbol_watch.refresh()
+            logger.info(
+                "Activated %d symbols after backtest.",
+                len(activated),
+            )
 
     async def _run_loop(self):
         while not self.stop_event.is_set():

@@ -5,14 +5,12 @@ import threading
 from datetime import datetime, timedelta, timezone
 
 from advisor.core.health_bus import HealthBus
-from advisor.core.state import BotLifecycle, StateManager, symbolStrategy
+from advisor.core.state import BotLifecycle, StateManager, Strategy
 from advisor.indicators.signal_store import SignalStore
 from advisor.scheduler.process_sceduler import ProcessScheduler
 from advisor.scheduler.requirements import ProcessRequirement
 from advisor.scheduler.resource_registry import ResourceRegistry
 from advisor.utils import dataHandler
-from advisor.indicators.MA.MovingAverage import MovingAverageCrossover
-from advisor.indicators.Volume.volumeindex import VolumeIndex
 from advisor.Client.symbols.symbol_watch import SymbolWatch
 
 logging.basicConfig(
@@ -28,7 +26,7 @@ logger = logging.getLogger("Strategy_Manager")
 
 STRATEGY_REQS = [ProcessRequirement("market_data", max_age=timedelta(minutes=5))]
 class strategyManager:
-    name = "Strategy"
+    name = "strategy"
 
     def __init__(
         self,
@@ -57,9 +55,6 @@ class strategyManager:
         self.stop_event = shutdown_event
         self.interval = interval
 
-        self.strategies: dict[str, symbolStrategy] = {}
-        self._init_symbol_strategys()
-
         self.registry.register("signals")
 
     def start(self):
@@ -85,13 +80,14 @@ class strategyManager:
 
     async def _run_cycle(self):
         produced = 0
-        for symbol in self.symbol_watch.active_symbol_names():
-            payload = await asyncio.to_thread(self._build_signal, symbol)
-            if payload is None:
-                continue
-            self.signal_store.add_signal(payload)
-            self.symbol_watch.mark_signal(symbol)
-            produced += 1
+        for symbol in self.symbol_watch.active_symbols:
+            for s in symbol.strategies:
+                payload = await asyncio.to_thread(self._build_signal, symbol.symbol, s)
+                if payload is None:
+                    continue
+                self.signal_store.add_signal(payload)
+                self.symbol_watch.mark_signal(symbol)
+                produced += 1
 
         self.registry.set_ready("signals")
         self.heartbeats[self.name] = datetime.now(timezone.utc).isoformat()
@@ -104,10 +100,9 @@ class strategyManager:
             },
         )
 
-    def _build_signal(self, symbol: str):
-        sym = self.strategies[symbol]
+    def _build_signal(self, symbol, strategy: Strategy):
         try:
-            data = sym.stratey.run()
+            data = strategy(False)
         except Exception as e:
             logger.exception("Signal build failed for %s: %s", symbol, e)
             self.symbol_watch.mark_error(symbol, f"signal build failed: {e}")
@@ -132,9 +127,3 @@ class strategyManager:
             "timestamp": datetime.now(timezone.utc),
             "data": {"price": price},
         }
-
-    def _init_symbol_strategys(self):
-        for symbol in self.symbol_watch.active_symbol_names():
-            strategy_instance = MovingAverageCrossover(symbol=symbol, client=self.client, backtest=False, cache=self.cache)
-            strategy = symbolStrategy(EMA=strategy_instance, Volume=VolumeIndex())
-            self.strategies[symbol] = strategy

@@ -21,9 +21,9 @@ class SystemBootstrap:
     def initialize(self):
         self._load_user_config()
         self._load_state()
-        self._initialize_broker()
-        self._verify_account()
-        self._sync_account_state_once()
+        # self._initialize_broker()
+        # self._verify_account()
+        # self._sync_account_state_once()
         return {"client": self.client, "config": self.config, "state": self.state}
 
     def _load_user_config(self):

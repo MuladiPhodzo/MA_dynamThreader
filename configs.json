@@ -16,17 +16,5 @@
         "max_open_trades": 10,
         "max_daily_loss": 10,
         "max_concurrent_trades": 5
-    },
-    "symbols": {
-        "usdjpy": {
-            "last_backtest": "",
-            "score": 0.0,
-            "enabled": "False"
-        },
-        "gbpusd": {
-            "last_backtest": "",
-            "score": 0.0,
-            "enabled": "False"
-        }
     }
 }

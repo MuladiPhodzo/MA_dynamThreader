@@ -1,4 +1,5 @@
 import json
+import os
 import logging
 import signal
 import sys
@@ -40,6 +41,7 @@ class Supervisor:
     STATE_FILE = Path("runtime/supervisor_state.json")
     MAX_RESTARTS = 5
     HEARTBEAT_TIMEOUT = timedelta(minutes=1)
+    STATUS_LOG_INTERVAL = timedelta(seconds=30)
 
     def __init__(self, shutdown, state_manager: StateManager, heartbeats: HeartbeatRegistry):
         self.shutdown = shutdown
@@ -103,9 +105,13 @@ class Supervisor:
         snapshot = {}
         for name, proc in self.processes.items():
             is_alive = bool(proc.process and proc.process.is_alive())
+            thread_id = None
+            if is_alive and proc.process:
+                thread_id = proc.process.native_id if hasattr(proc.process, "native_id") else proc.process.ident
             snapshot[name] = {
                 "running": is_alive,
-                "pid": proc.process.pid if is_alive else None,
+                "pid": thread_id,
+                "process_pid": os.getpid(),
                 "restart_count": proc.restart_count,
                 "last_heartbeat": self.heartbeats.get(name),
                 "dependencies": list(self.dep_graph.graph.get(name, [])),
@@ -213,8 +219,20 @@ class Supervisor:
 
     def monitor(self) -> None:
         logger.info("Supervisor monitor loop started")
+        last_status = datetime.now(timezone.utc)
         while not self.shutdown.is_set():
             now = datetime.now(timezone.utc)
+            if now - last_status >= self.STATUS_LOG_INTERVAL:
+                snapshot = self.get_process_snapshot()
+                summary = {
+                    name: {
+                        "running": meta["running"],
+                        "last_heartbeat": meta["last_heartbeat"],
+                    }
+                    for name, meta in snapshot.items()
+                }
+                logger.info("Supervisor status: %s", summary)
+                last_status = now
             for name, proc in list(self.processes.items()):
                 if not proc.process or not proc.process.is_alive():
                     logger.error("Process crashed: %s", name)

@@ -126,116 +126,146 @@ MovingAverage_Advisor/
 ## system process diagram
 
 ```scss
-                            ┌───────────────────────────┐           ┌───────────────────┐
-[strat]>───────────────────>|       APP BOOTSTRAP       |      None |   setUp Wizard    |
-                            |---------------------------|     ┌────>|-------------------|
-                            | - Fetch configs           | cfg |     |- manual config    |
-                            |  └── validate configs <>────────┘┐    |                   |
-                            └───────────────────────────┘      |    └───────────────────┘
-                                                               |               |new_configs
-                ┌──────────────────────────────────────────────┘<──────────────┘
-                |                           
-                |
-                |
-                |                                                 Shared Cache (Authoritative)
-Main            ▼                      ┌───────────────────────────────────────────────────────────────────────────────────────────────┐
-┌───────────────────────────┐          |                                                                                               |
-|                           |          |  Process1: mt5 pipeline                                                                       |
-| Process                   |          |  ┌─────────────────────────────────────────────────────┐                                      |
-| Supervisor                |       ┌────>|params: user_data, cache_handler                     |                                      |
-|                           |       |  |  │-----------------------------------------------------│                                      |
-|                           |       |  |  | 1. init mt5 connection                              |                                      |
-|                           |       |  |  | 2. ingest market data                               |                                      |
-|                           |       |  |  | 3. Normalize data                                   |                                      |
-|---------------------------|       |  |  | 4. cache all symbol data for other process          |───────────┐                          |
-|                           |       |  |  |                                                     |           │ all symbols              |
-| - bot state               |       |  |  └─────────────────────────────────────────────────────┘           |                          |
-| - settings                |───────┘  |                                                                    |                          |
-| - process lifecycle       | start 1  |                                      Process2: symbol backtest     ▼                          |
-|                           |          |                                      ┌─────────────────────────────────────────────────────┐  |
-|                           |          |                                      | params: client, cache_handler                       |  |
-|                           | start 2  |                                      |-----------------------------------------------------│  |
-|                           |────────────────────────────────────────────────>|    ├── load last backtest timestamp                 |  |
-|                           |          |                                      |    │                                                |  |
-|                           |          |                                      |    └── every N minutes:                             |  |
-|                           |          |                                      |       ├── check if 3 months elapsed                 |  |
-|                           |          |                                      |       ├── backtest all symbols                      |  |
-|                           |          |                                      |       ├── score symbols                             |  |
-|                           |          |                                      |       └── activate top performers                   |  |
-|                           |          |                                      |                                                     |  |
-|                           |          |                                      └─────────────────────────────────────────────────────┘  |
-|                           |─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-|                           | start 4  |                                              |                                                |                          |
-|                           |          |                                              |                                                |                          |
-|                           |          |                                              |   top N symbols                                |                          |
-|                           |          |                                              |                                                |                          |
-|                           |          |                                              |                                                |                          |
-|                           |          |      Process3: Multi strategy thread Handler ▼                                                |                          |
-|                           |          |     ┌────────────────────────────────────────────────────────────┐                            |                          |
-|                           |          |     | strategy: MA                                               |                            |                          |
-|                           |          |     | └──Thread: EURUSD                                          |                            |                          |
-|                           |          |     |    └── DataHandler(EURUSD_data) > from cache_handler       |                            |                          |
-|                           |          |     |            ┌─────────────────────┐                         |                            |                          |
-|                           | start 3  |     |            | Symbol Thread       |────────────────────┐    |                            |                          |
-|                           |───────────────>|            │---------------------│ MovingAverage      │    |                            |                          |
-|                           |          |     |            │ EURUSD              | Crossover Strategy │    |                            |                          |
-|                           |          └─────|            │  └── DataHandler    |--------------------│    |────────────────────────────┘                          |
-|                           |                |            |    ├── M15          | - indicators       │    |                                                       |
-|                           |                |            |    ├── M30          | - alignment        │    |  signal stream 1                                      |
-|                           |                |            |    ├── 1H           | - signals          │──────────────────────────┐                                 |
-|                           |                |            |    └── 4H           |────────────────────┘    |                     |                                 |
-|                           |                |            └─────────────────────┘                         |                     |                                 | 
-|                           |                |------------------------------------------------------------|                     |                                 ▼
-|                           |                | strategy: scalper                                          |                     |                Process4: trade execution 
-|                           |                | └──Thread: GBPUSD                                          |                     |               ┌───────────────────────────────────┐
-|                           |                |    └── DataHandler(GBPUSD)                                 |                     └──────────────>|         SIGNAL VALIDATION         |
-|                           |                |            ┌─────────────────────┐                         |                                     |       TRADE CONTROL CENTRE        |
-|                           |                |            | Symbol Thread       |────────────────────┐    |                                     |-----------------------------------|
-|                           |                |            │---------------------│                    │    |                                     |  V  |      TRADE EXECUTION        |
-|                           |                |            │ GBPUSD              | Scalper Strategy   │    |                                     |  A  |-----------------------------|
-|                           |                |            │  └── DataHandler    |--------------------│    |                                     |  L  |- Risk Management            |
-|                           |                |            |    ├── M15          | - indicators       │    |                                     |  I  |- Live Trade Execution       |
-|                           |                |            |    ├── M30          | - alignment        │    |   signal stream 2                   |  D  |- Logging + Monitoring       |
-|                           |                |            |    ├── 1H           | - signals          │─────────────────────────────────────────>|  A  |          ▼                  |
-|                           |                |            |    └── 4H           |────────────────────┘    |                                     |  T  |          ▼                  |
-|                           |                |            └─────────────────────┘                         |                                     |  I  |          ▼                  |
-|                           |                |------------------------------------------------------------|                                     |  O  |          ▼                  |
-|                           |                |strategy: volitility                                        |                                     |  N  |          ▼                  | 
-|                           |                |    Thread: USDJPY                                          |                                     |----------------▼------------------|
-|                           |                |    └── DataHandler(USDJPY)                                 |                                     |     TRADE LOGGING + MONITORING    |
-|                           |                |            ┌─────────────────────┐                         |                                     |-----------------------------------|
-|                           |                |            | Symbol Thread       |────────────────────┐    |                 ┌──────────────────>| - Symbol Metrics                  |
-|                           |                |            │---------------------│ MovingAverage      │    |                 |                   |   └── score                       |
-|                           |                |            │ USDJPY              | Crossover Strategy │    |                 |                   |     ├── health                    |
-|                           |                |            │  └── DataHandler    |--------------------│    |                 |                   |     ├── stats                     |
-|                           |                |            |    ├── M15          | - indicators       │    |                 |                   |     └── health                    |
-|                           |                |            |    ├── M30          | - alignment        │    |                 |                   |                                   |
-|                           |                |            |    ├── 1H           | - signals          │──────────────────────┘                   └───────────────────────────────────┘
-|                           |                |            |    └── 4H           |────────────────────┘    |   signal stream 3       
-|                           |                |            └─────────────────────┘                         |                  
-|                           |                |                                                            |                  
-|                           |                |                                                            |                  
-|                           |                |                                                            |                  
-|                           |                └────────────────────────────────────────────────────────────┘
-|                           |
-└───┬───────────┬───────────┘                     ┌─────────────────────────────────────────────────┐
-    |           └────────────────────────────────>|params: data_file_dir, data_plotter, bot_state   |
-    |               Process 5:  Dashboard GUI     |-------------------------------------------------|
-    |                                             | ┌─────────────────────────────────────────────┐ |
-    |                                             | │ Header: Account | Bot Status | Time | User  │ |
-/ data \                                          | ├───────────┬─────────────────────────────────┤ |
-\stream/                                          | │ Sidebar   │ Main Content Area               │ |
-    |                                             | │           │                                 │ |
-    |     <symbol/data.json>──────────────────────> │ - Charts  │  (Active Panel)                 │ |
-    ├──</process 3>───────────────────────────────> │ - Symbols │                                 │ |
-    └──<bot/config.json>──────────────────────────> │ - Bot     │                                 │ |
-          <bot/bot_logs.log>──────────────────────> │ - Logs    │                                 │ |
-<gitHub.com/repo/releases/v=1.1.2>────────────────> │ - Store   │                                 │ |
-                                    ┌─────────────> │ - Support │                                 │ |
-                                    |             | └───────────┴─────────────────────────────────┘ |
-                                    |             └─────────────────────────────────────────────────┘
-                                    ▼
-                                muladiDev@iautomate.co.za
+                             ┌───────────────────────────────────────────────────────┐
+[start] ────────────────────>│         APP BOOTSTRAP                                 │
+                             │-------------------------------------------------------│
+                             │ - Load configs.json                                   │
+                             │ - Load bot_state.json                                 │
+                             │ - Init MT5 client                                     │
+                             │ - Verify account                                      │
+                             │  (src/main/python/advisor/bootstrap/sys_bootstrap.py) |
+                             └───────────────────────────────────────────────────────┘
+                                             |
+                                             | (config + state + MT5 client)
+                                             ▼
+┌──────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                            MAIN                                              │
+│----------------------------------------------------------------------------------------------│
+│ - StateManager (bot lifecycle + bot state)                                                   │
+│   (src/main/python/advisor/core/state.py)                                                    │
+│ - SymbolWatch (active + all symbols, telemetry)                                              │
+│   (src/main/python/advisor/Client/symbols/symbol_watch.py)                                   │
+│ - SignalStore                                                                                │
+│   (src/main/python/advisor/indicators/signal_store.py)                                       │
+│ - TradeStateManager                                                                          │
+│   (src/main/python/advisor/Trade/trateState.py)                                              │
+│ - CacheManager                                                                               │
+│   (src/main/python/advisor/utils/dataHandler.py)                                             │
+│ - ProcessScheduler (ReadinessGate + ResourceRegistry)                                        │
+│   (src/main/python/advisor/scheduler/process_sceduler.py)                                    │
+│ - HealthBus (shared process health)                                                          │
+│   (src/main/python/advisor/core/health_bus.py)                                               │
+│ - HeartbeatRegistry                                                                          │
+│   (src/main/python/advisor/process/heartbeats.py)                                            │
+│ - DashboardServer (FastAPI/Uvicorn thread)                                                   │
+│   (src/main/python/advisor/api/server.py)                                                    │
+│----------------------------------------------------------------------------------------------│
+│                           Supervisor (threaded process manager)                              │
+│      ┌────────────────────────────────────────────────────────────────────────────────────┐  │
+│      │ - register_process()                                                               │  │
+│      │ - dependency graph (start order + dependency enforcement)                          │  │
+│      │ - start/stop/restart                                                               │  │
+│      │ - heartbeat monitor + periodic status log                                          │  │
+│      │  (src/main/python/advisor/process/process_engine.py)                               │  │
+│      └────────────────────────────────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────────────────────────────────┘
+                                             |
+                                             | dependency graph (startup order)
+                                             | pipeline -> backtest -> strategy -> execution
+                                             ▼
+┌──────────────────────────────────────────────────────────────────────────────────────────────┐
+│                           SCHEDULER READINESS GATES (ProcessScheduler)                       │
+│----------------------------------------------------------------------------------------------│
+│ ReadinessGate checks ResourceRegistry before running each cycle:                             │
+│ - pipeline  : requires []                                                                    │
+│ - backtest  : requires market_data                                                           │
+│ - strategy  : requires market_data                                                           │
+│ - execution : requires signals                                                               │
+│----------------------------------------------------------------------------------------------│
+│ ResourceRegistry is updated by processes when a resource becomes ready:                      │
+│ - pipeline  -> sets market_data                                                              │
+│ - backtest  -> sets backtest_data + symbols                                                  │
+│ - strategy  -> sets signals                                                                  │
+│----------------------------------------------------------------------------------------------│
+│ Files:                                                                                       │
+│ - ReadinessGate                                                                              │
+│   (src/main/python/advisor/scheduler/readiness_gate.py)                                      │
+│ - ResourceRegistry                                                                           │
+│   (src/main/python/advisor/scheduler/resource_registry.py)                                   │
+│ - ProcessRequirement                                                                         │
+│   (src/main/python/advisor/scheduler/requirements.py)                                        │
+└──────────────────────────────────────────────────────────────────────────────────────────────┘
+                                             |
+                                             ▼
+┌──────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                      PROCESS THREADS                                         │
+│----------------------------------------------------------------------------------------------│
+│ Process 1: pipeline                                                                          │
+│ - Ingest market data via MT5                                                                 │
+│ - Cache data                                                                                │
+│ - Registry: set_ready("market_data")                                                         │
+│ - Heartbeats + HealthBus                                                                     │
+│ (src/main/python/advisor/mt5_pipeline/runner.py)                                              │
+│ (src/main/python/advisor/mt5_pipeline/core.py)                                                │
+│----------------------------------------------------------------------------------------------│
+│ Process 2: backtest                                                                          │
+│ - Runs if 90 days elapsed                                                                    │
+│ - Uses cache + MT5 fetches                                                                   │
+│ - Registry: set_ready("backtest_data"), set_ready("symbols")                                 │
+│ - Heartbeats + HealthBus                                                                     │
+│ (src/main/python/advisor/backtest/engine.py)                                                  │
+│ (src/main/python/advisor/backtest/core.py)                                                    │
+│----------------------------------------------------------------------------------------------│
+│ Process 3: strategy                                                                          │
+│ - Requires market_data (gate)                                                                │
+│ - Generates signals into SignalStore                                                         │
+│ - Registry: set_ready("signals")                                                             │
+│ - Heartbeats + HealthBus                                                                     │
+│ (src/main/python/advisor/indicators/strategy.py)                                              │
+│ - Strategy implementations                                                                   │
+│   (src/main/python/advisor/indicators/MA/MovingAverage.py)                                   │
+│   (src/main/python/advisor/indicators/Volume/volumeindex.py)                                 │
+│----------------------------------------------------------------------------------------------│
+│ Process 4: execution                                                                         │
+│ - Requires signals (gate)                                                                    │
+│ - RiskManager + trade execution                                                              │
+│ - Heartbeats + HealthBus                                                                     │
+│ (src/main/python/advisor/Trade/trade_engine.py)                                               │
+│ - Trade handler                                                                              │
+│   (src/main/python/advisor/Trade/tradeHandler.py)                                             │
+│ - Risk manager                                                                               │
+│   (src/main/python/advisor/Trade/RiskManager.py)                                              │
+└──────────────────────────────────────────────────────────────────────────────────────────────┘
+                                             |
+                                             ▼
+┌──────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                   SERVICE LAYER (MT5 + DATA)                                 │
+│----------------------------------------------------------------------------------------------│
+│ MetaTrader5 client                                                                           │
+│ - Connect/login                                                                              │
+│ - Fetch symbols + data                                                                       │
+│ (src/main/python/advisor/Client/mt5Client.py)                                                │
+│                                                                                              │
+│ Cache + data handler                                                                         │
+│ (src/main/python/advisor/utils/dataHandler.py)                                               │
+│                                                                                              │
+│ Symbol state + telemetry                                                                     │
+│ (src/main/python/advisor/Client/symbols/symbol_watch.py)                                     │
+└──────────────────────────────────────────────────────────────────────────────────────────────┘
+                                             |
+                                             ▼
+┌──────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                   DASHBOARD API (FastAPI)                                    │
+│----------------------------------------------------------------------------------------------│
+│ /status           -> HealthBus + Supervisor snapshot + Symbol telemetry + Bot state          │
+│ /symbols          -> list symbols                                                            │
+│ /symbols/{sym}    -> toggle symbol enabled                                                   │
+│ /processes/*      -> start/stop/restart                                                      │
+│ /config/reload    -> reload bot state + refresh SymbolWatch                                  │
+│ /backtest/run     -> reset backtest timer                                                    │
+│ (src/main/python/advisor/api/server.py)                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────┘
+
 ```
 
 ## 🚀 Getting Started
