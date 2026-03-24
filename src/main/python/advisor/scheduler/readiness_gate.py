@@ -38,3 +38,22 @@ class ReadinessGate:
                 )
 
             time.sleep(1)
+
+    def is_ready(self, requirements: list[ProcessRequirement]) -> bool:
+        unmet = []
+
+        for req in requirements:
+            status = self.registry.get(req.resource)
+
+            if status is None:
+                unmet.append(req.resource)
+                continue
+
+            if status.state != ResourceState.READY:
+                unmet.append(req.resource)
+                continue
+
+            if req.max_age and not status.is_fresh(req.max_age):
+                unmet.append(req.resource)
+
+        return not unmet

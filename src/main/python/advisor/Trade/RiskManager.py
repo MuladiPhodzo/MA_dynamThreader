@@ -1,11 +1,11 @@
-import logging
 from datetime import datetime, timedelta, timezone
 
 from advisor.Trade.trateState import TradeStateManager
 from advisor.core.health_bus import HealthBus
 from advisor.core.state import BotLifecycle, StateManager
+from advisor.utils.logging_setup import get_logger
 
-logger = logging.getLogger("RiskManager")
+logger = get_logger("RiskManager")
 
 
 class RiskManager:

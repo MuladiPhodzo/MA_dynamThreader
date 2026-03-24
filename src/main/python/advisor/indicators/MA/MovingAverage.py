@@ -1,5 +1,4 @@
-import sys
-import logging
+from advisor.utils.logging_setup import get_logger
 import numpy as np
 import pandas as pd
 from collections.abc import Iterable
@@ -11,19 +10,7 @@ import time
 from advisor.utils.dataHandler import CacheManager, DataHandler
 from advisor.Client.mt5Client import MetaTrader5Client
 from advisor.core.state import SymbolState
-# -------------------------
-# Logging Configuration
-# -------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler("MA_DynamAdvisor.log", encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
-
-logger = logging.getLogger("_EMA_")
+logger = get_logger("_EMA_")
 
 class MovingAverageCrossover:
 
@@ -237,7 +224,7 @@ class MovingAverageCrossover:
         except Exception as e:
             logger.exception(f"exception in proximity calculation for {self.symbol_name} {tf}: {e}")
 
-        if self.verify_fields():
+        if self.verify_fields(tf, df):
             self.data_handler.update_timestamps(self._build_all_timestamps(df))
             return df
         return
@@ -332,11 +319,11 @@ class MovingAverageCrossover:
             - Insert Main_Trend into 15M & 30M rows that match that timestamp
         """
         try:
-            common_ts = set.intersection(
-                *sorted(
-                    self.data_handler.all_timestamps
-                )
-            )
+            if not self.data_handler.all_timestamps:
+                logger.warning(f"{self.symbol_name}: No timestamps found for MTF alignment.")
+                return
+
+            common_ts = sorted(self.data_handler.all_timestamps)
             if not common_ts:
                 logger.warning(f"{self.symbol_name}: No timestamps found for MTF alignment.")
                 return
@@ -711,7 +698,27 @@ class MovingAverageCrossover:
             self.cache.set(key, results)
             return None
 
-        frame = self.data_handler.data["15M"].iloc[-1]
+        primary_tf = None
+        frame = None
+        preferred_tfs = ["15M", "30M", "1H", "2H", "4H", "6H", "8H", "1D"]
+        for tf in preferred_tfs:
+            df = self.data_handler.data.get(tf)
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                primary_tf = tf
+                frame = df.iloc[-1]
+                break
+
+        if frame is None:
+            for tf, df in self.data_handler.data.items():
+                if isinstance(df, pd.DataFrame) and not df.empty:
+                    primary_tf = tf
+                    frame = df.iloc[-1]
+                    break
+
+        if frame is None:
+            logger.warning(f"{self.symbol_name}: no timeframe data available for live signal.")
+            return None
+
         signal = self.identify_Trend_Alignment()
         return {"sig": signal, "frame": frame}
 

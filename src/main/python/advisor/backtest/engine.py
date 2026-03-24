@@ -1,11 +1,11 @@
 import asyncio
 import json
-import logging
-import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from advisor.core.health_bus import HealthBus
+from advisor.core.event_bus import EventBus
+from advisor.core import events
 from advisor.core.state import BotLifecycle, StateManager
 from advisor.scheduler.process_sceduler import ProcessScheduler
 from advisor.scheduler.requirements import ProcessRequirement
@@ -13,19 +13,15 @@ from advisor.scheduler.resource_registry import ResourceRegistry
 from advisor.utils.dataHandler import CacheManager
 from advisor.Client.symbols.symbol_watch import SymbolWatch
 from advisor.backtest.core import Backtest
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler("MA_DynamAdvisor.log", encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
+from advisor.utils.logging_setup import get_logger
 
-logger = logging.getLogger("Backtest")
+logger = get_logger("Backtest")
 
 STATE_FILE = Path("bot_state.json")
-BACKTEST_REQS = [ProcessRequirement("market_data", max_age=timedelta(minutes=10))]
+BACKTEST_REQS = [
+    ProcessRequirement("market_data", max_age=timedelta(minutes=10)),
+    ProcessRequirement("symbol_ingestion", max_age=timedelta(minutes=10)),
+]
 
 
 class backtestProcess:
@@ -43,11 +39,13 @@ class backtestProcess:
         state_manager: StateManager,
         scheduler: ProcessScheduler,
         symbol_watch: SymbolWatch,
+        event_bus: EventBus | None = None,
+        state_store=None,
     ):
         self.client = client
         self.cache = cache_handler
-        self.backtest = Backtest(self.client, self.cache, self.symbol_watch)
         self.symbol_watch = symbol_watch
+        self.backtest = Backtest(self.client, self.cache, self.symbol_watch)
         self.registry = registry
         self.health_bus = health_bus
         self.heartbeats = heartbeats
@@ -55,6 +53,9 @@ class backtestProcess:
         self.scheduler = scheduler
         self.bot_state = bot_state
         self.state_manager = state_manager
+        self.event_bus = event_bus
+        self.state_store = state_store
+        self._last_idle_beat: datetime | None = None
 
         self.registry.register("backtest_data")
         self.registry.register("symbols")
@@ -70,7 +71,11 @@ class backtestProcess:
             return None
 
     def _save_last_backtest_time(self, ts: datetime):
-        STATE_FILE.write_text(json.dumps({"last_backtest_run": ts.isoformat()}, indent=2), encoding="utf-8")
+        try:
+            self.state_manager.last_backtest_run = ts
+            StateManager.save_bot_state(self.state_manager.bot)
+        except Exception:
+            logger.exception("Failed to persist backtest timestamp")
 
     async def _backtest_cycle(self):
         now = datetime.now(timezone.utc)
@@ -79,14 +84,27 @@ class backtestProcess:
             return
 
         self.state_manager.set_state(BotLifecycle.RUNNING_BACKTEST)
-        self.backtest.__run_loop()
+        for sym in self.symbol_watch.all_symbols:
+            await asyncio.to_thread(self.backtest.run, sym)
+            sym.last_backtest = self.state_manager.last_backtest_run
+            
         self.registry.set_ready("backtest_data")
         self.registry.set_ready("symbols")
         self._save_last_backtest_time(now)
         self.state_manager.last_backtest_run = now
         StateManager.save_bot_state(self.state_manager.bot)
+        if self.state_store is not None:
+            self.state_store.update_section("backtest", {"last_run": now.isoformat()})
         self._activate_symbols_after_backtest()
         self.state_manager.set_state(BotLifecycle.RUNNING)
+        if self.event_bus is not None:
+            self.event_bus.emit(
+                events.BACKTEST_COMPLETED,
+                {
+                    "active_symbols": len(self.symbol_watch.all_symbols),
+                    "telemetry": self.symbol_watch.snapshot(),
+                },
+            )
         self.health_bus.update(
             self.name,
             "RUNNING",
@@ -119,16 +137,40 @@ class backtestProcess:
             )
 
     async def _run_loop(self):
-        while not self.stop_event.is_set():
-            await self.scheduler.schedule(
-                process_name=self.name,
-                required_resources=BACKTEST_REQS,
-                task=self._backtest_cycle,
-                shutdown_event=self.stop_event,
-                heartbeats=self.heartbeats,
-                timeout=600,
-            )
-            await asyncio.sleep(5)
+        if self.event_bus is None:
+            raise RuntimeError("Event bus not configured for backtest process")
+
+        sub = self.event_bus.subscribe(events.MARKET_DATA_READY)
+        try:
+            while not self.stop_event.is_set():
+                evt = await sub.next(stop_event=self.stop_event, timeout=1.0)
+                if evt is None:
+                    self._idle_heartbeat()
+                    continue
+                await self.scheduler.schedule(
+                    process_name=self.name,
+                    required_resources=BACKTEST_REQS,
+                    task=self._backtest_cycle,
+                    shutdown_event=self.stop_event,
+                    heartbeats=self.heartbeats,
+                    timeout=600,
+                )
+        finally:
+            sub.close()
+
+    def _idle_heartbeat(self) -> None:
+        now = datetime.now(timezone.utc)
+        if self._last_idle_beat and now - self._last_idle_beat < timedelta(seconds=30):
+            return
+        self._last_idle_beat = now
+        self.heartbeats[self.name] = now.isoformat()
+        self.health_bus.update(
+            self.name,
+            "IDLE",
+            {
+                "telemetry": self.symbol_watch.snapshot(),
+            },
+        )
 
     def start(self):
         try:

@@ -1,23 +1,10 @@
 import os
-import sys
-import logging
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from advisor.utils.dataHandler import CacheManager as Cache
-# -------------------------
-# Logging Configuration
-# -------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler("MA_DynamAdvisor.log", encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
-
-logger = logging.getLogger(__name__)
+from advisor.utils.logging_setup import get_logger
+logger = get_logger(__name__)
 class TradeStats:
     def __init__(self, data_path="stats/trading_stats.csv", reports_path="stats/reports"):
         self.data_handler.data_path = data_path

@@ -27,6 +27,12 @@ class BotLifecycle(Enum):
     STOPPING = 7
     STOPPED = 8
 
+class symbolCycle(Enum):
+    STAND_BY = 1
+    INITIALIZING = 2
+    BACKTESTING = 3
+    READY = 4
+    DEGRADED = 5
 
 # =========================================================
 # DATA STRUCTURES
@@ -51,7 +57,14 @@ class SymbolState:
     score: float = 0.0
     last_backtest: Optional[datetime] = None
     enabled: bool = False
-    meta: dict = field(default_factory=dict)
+    state: symbolCycle = symbolCycle.STAND_BY
+    meta: dict = field(
+        default_factory=lambda: {
+            "Total_trades": 0,
+            "Total_signals": 0,
+            "Pip_size": 0,
+        }
+    )
 
 
 @dataclass

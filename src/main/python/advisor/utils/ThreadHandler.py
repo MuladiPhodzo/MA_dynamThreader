@@ -1,25 +1,11 @@
 # MA_DynamAdvisor.py  -- INTEGRATED with ThreadHandler
-import sys
 import time
 import threading
-import logging
+from advisor.utils.logging_setup import get_logger
 
 import traceback
 from typing import Callable, Dict, List, Optional
-
-# -------------------------
-# Logging Configuration
-# -------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler("Threads.log", encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
-
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # -------------------------

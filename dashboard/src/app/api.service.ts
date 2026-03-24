@@ -1,7 +1,13 @@
 import { Injectable } from "@angular/core";
 import { HttpClient } from "@angular/common/http";
 import { Observable } from "rxjs";
-import { StatusResponse } from "./models";
+import {
+  AccountHistoryResponse,
+  StatusResponse,
+  SupportKbResponse,
+  SupportTicketPayload,
+  SupportTicketResponse,
+} from "./models";
 
 @Injectable({ providedIn: "root" })
 export class ApiService {
@@ -35,5 +41,17 @@ export class ApiService {
 
   runBacktest() {
     return this.http.post(`${this.baseUrl}/backtest/run`, {});
+  }
+
+  getAccountHistory() {
+    return this.http.get<AccountHistoryResponse>(`${this.baseUrl}/account/history`);
+  }
+
+  createSupportTicket(payload: SupportTicketPayload) {
+    return this.http.post<SupportTicketResponse>(`${this.baseUrl}/support/ticket`, payload);
+  }
+
+  getSupportKb() {
+    return this.http.get<SupportKbResponse>(`${this.baseUrl}/support/kb`);
   }
 }

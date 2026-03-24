@@ -1,5 +1,4 @@
 import json
-import logging
 import sys
 from pathlib import Path
 from threading import Event
@@ -10,6 +9,8 @@ from advisor.Trade.trateState import TradeStateManager
 from advisor.backtest.engine import backtestProcess
 from advisor.bootstrap.sys_bootstrap import BootstrapError, SystemBootstrap
 from advisor.core.state import BotLifecycle, StateManager, SymbolState, BotState
+from advisor.core.event_bus import EventBus
+from advisor.core.flow_state import FlowStateStore
 from advisor.indicators.signal_store import SignalStore
 from advisor.indicators.strategy import strategyManager
 from advisor.mt5_pipeline.runner import pipelineProcess
@@ -21,17 +22,9 @@ from advisor.Client.mt5Client import MetaTrader5Client
 from advisor.Client.symbols.symbol_watch import SymbolWatch
 from advisor.api.server import DashboardContext, DashboardServer
 from advisor.GUI.userInput import setUpWizard
+from advisor.utils.logging_setup import get_logger
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
-    handlers=[
-        logging.FileHandler("advisor_engine.log", encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
-
-logger = logging.getLogger("Runner")
+logger = get_logger("Runner")
 
 
 class Main:
@@ -48,6 +41,9 @@ class Main:
         self.scheduler = ProcessScheduler(None)
         self.heartbeats = HeartbeatRegistry()
         self.signal_store = SignalStore()
+        self.flow_state = FlowStateStore()
+        self.flow_state.restore_signal_store(self.signal_store)
+        self.event_bus = EventBus()
         self.client: MetaTrader5Client | None = None
         self.trade_state: TradeStateManager | None = None
         self.cache_handler = CacheManager()
@@ -167,13 +163,15 @@ class Main:
 
         existing = {sym.symbol: sym for sym in (self.state_manager.bot.symbols or [])}
         updated = []
+
         for sym in mt5_symbols:
             state = existing.get(sym)
             if state is None:
-                state = SymbolState(symbol=sym, enabled=False, meta={"desired_enabled": True})
+                state = SymbolState(symbol=sym, enabled=False, last_backtest=self.state_manager.last_backtest_run)
             updated.append(state)
 
         current_symbols = [sym.symbol for sym in (self.state_manager.bot.symbols or [])]
+
         if current_symbols != mt5_symbols:
             self.state_manager.bot.symbols = updated
             StateManager.save_bot_state(self.state_manager.bot)
@@ -192,11 +190,11 @@ class Main:
             if not isinstance(sym.meta, dict):
                 sym.meta = {}
                 changed = True
-            if "desired_enabled" not in sym.meta:
+            if not sym.meta:
                 if getattr(self, "_config_symbols_empty", False):
-                    sym.meta["desired_enabled"] = True
-                else:
-                    sym.meta["desired_enabled"] = bool(sym.enabled)
+                    sym.meta["total_signals"] = 0
+                    sym.meta["total_trades"] = 0
+                sym.meta.setdefault("Pip_size", 0)
                 changed = True
             if sym.enabled:
                 sym.enabled = False
@@ -222,6 +220,8 @@ class Main:
             self.scheduler,
             self.state_manager,
             self.symbol_watch,
+            event_bus=self.event_bus,
+            state_store=self.flow_state,
         )
         self.backtest = backtestProcess(
             self.client,
@@ -234,6 +234,8 @@ class Main:
             self.state_manager,
             self.scheduler,
             self.symbol_watch,
+            event_bus=self.event_bus,
+            state_store=self.flow_state,
         )
         self.strategy = strategyManager(
             self.client,
@@ -246,6 +248,8 @@ class Main:
             self.signal_store,
             self.state_manager,
             self.symbol_watch,
+            event_bus=self.event_bus,
+            state_store=self.flow_state,
         )
         self.execution = ExecutionProcess(
             client=self.client,
@@ -258,6 +262,8 @@ class Main:
             scheduler=self.scheduler,
             state_manager=self.state_manager,
             symbol_watch=self.symbol_watch,
+            event_bus=self.event_bus,
+            state_store=self.flow_state,
         )
 
         self.dashboard = DashboardServer(
@@ -273,7 +279,7 @@ class Main:
         self.orch.register_process(name="backtest", target=self.backtest.start, depends=["pipeline"])
         self.orch.register_process(name="strategy", target=self.strategy.start, depends=["pipeline", "backtest"])
         self.orch.register_process(name="execution", target=self.execution.start, depends=["strategy"])
-        logger.info("Engines registered.")
+        logger.info("Engines Ready.")
 
     def _restore_open_positions(self):
         getter = getattr(self.client, "get_open_positions", None)
@@ -296,30 +302,54 @@ class Main:
             self.shutdown()
             raise RuntimeError(f"critical system fault: {e}")
 
-    def shutdown(self, *args):
+    def _get_signal_name(self, signum: int) -> str:
+        try:
+            return signal.Signals(signum).name
+        except ValueError:
+            return str(signum)
+
+    def _log_shutdown_reason(self, *args):
         signum = args[0] if args and isinstance(args[0], int) else None
         if signum is not None:
-            try:
-                sig_name = signal.Signals(signum).name
-            except ValueError:
-                sig_name = str(signum)
+            sig_name = self._get_signal_name(signum)
             logger.warning("Shutdown signal received (%s).", sig_name)
         else:
             logger.warning("Shutdown requested.")
-        self.shutdown_event.set()
-        for ev in self.process_events.values():
-            ev.set()
+
+    def _persist_state(self):
+        try:
+            self.flow_state.save_signal_store(self.signal_store)
+        except Exception:
+            logger.exception("Failed to persist signal store")
+        try:
+            if self.execution:
+                self.flow_state.save_processed_signals(self.execution.processed_signals)
+        except Exception:
+            logger.exception("Failed to persist execution state")
+        try:
+            StateManager.save_bot_state(self.state_manager.bot)
+        except Exception:
+            logger.exception("Failed to persist bot state")
+
+    def _cleanup_services(self):
         self.orch.stop_all()
         if self.dashboard:
             try:
                 self.dashboard.stop()
             except Exception:
                 logger.exception("Failed to stop dashboard server")
-
         close = getattr(self.client, "close", None)
         if callable(close):
             close()
 
+    def shutdown(self, *args):
+        self._log_shutdown_reason(*args)
+        self.state_manager.set_state(BotLifecycle.STOPPING)
+        self.shutdown_event.set()
+        for ev in self.process_events.values():
+            ev.set()
+        self._persist_state()
+        self._cleanup_services()
         self.state_manager.set_state(BotLifecycle.STOPPED)
         logger.info("System shutdown complete.")
-        raise RuntimeError("system shut down manually")
+        sys.exit(0)

@@ -49,3 +49,48 @@ export interface StatusResponse {
   bot_state: BotState;
   timestamp: string;
 }
+
+export interface AccountHistoryPoint {
+  timestamp: string;
+  equity: number;
+  balance?: number;
+}
+
+export interface AccountHistorySummary {
+  min: number;
+  max: number;
+  latest: number;
+  change: number;
+  change_pct: number;
+  count: number;
+}
+
+export interface AccountHistoryResponse {
+  source: string;
+  points: AccountHistoryPoint[];
+  summary: AccountHistorySummary;
+}
+
+export interface SupportTicketPayload {
+  name?: string;
+  email?: string;
+  subject: string;
+  message: string;
+  priority?: string;
+}
+
+export interface SupportTicketResponse {
+  ok: boolean;
+  ticket_id: string;
+}
+
+export interface SupportArticle {
+  id: string;
+  title: string;
+  summary: string;
+  tag: string;
+}
+
+export interface SupportKbResponse {
+  articles: SupportArticle[];
+}

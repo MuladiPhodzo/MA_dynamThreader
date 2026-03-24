@@ -4,5 +4,566 @@
   "next_backtest_run": null,
   "backtest_running": false,
   "live_trading_enabled": true,
-  "symbols": {}
+  "symbols": {
+    "EURUSD": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "GBPUSD": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "USDCHF": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "USDJPY": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "USDCAD": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "AUDUSD": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "AUDNZD": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "AUDCAD": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "AUDCHF": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "AUDJPY": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "CHFJPY": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "EURGBP": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "EURAUD": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "EURCHF": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "EURJPY": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "EURNZD": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "EURCAD": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "GBPCHF": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "GBPJPY": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "CADCHF": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "CHFSGD": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "EURDKK": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "EURHKD": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "EURHUF": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "EURNOK": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "EURPLN": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "EURSEK": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "EURSGD": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "EURTRY": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "EURZAR": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "GBPDKK": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "GBPNOK": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "GBPSEK": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "GBPSGD": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "NZDSGD": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "SGDJPY": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "USDCNH": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "USDDKK": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "USDHKD": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "USDHUF": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "USDMXN": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "USDNOK": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "USDPLN": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "USDSEK": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "USDSGD": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "USDTRY": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "USDZAR": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "CADJPY": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "GBPCAD": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "GBPAUD": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "GBPNZD": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "NZDCAD": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "NZDCHF": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "NZDJPY": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "NZDUSD": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    },
+    "AUD": {
+      "score": 0.0,
+      "last_backtest": null,
+      "enabled": false,
+      "meta": {
+        "Total_trades": 0,
+        "Total_signals": 0,
+        "Pip_size": 0
+      }
+    }
+  }
 }

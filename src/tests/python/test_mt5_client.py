@@ -1,5 +1,3 @@
-from unittest.mock import patch
-
 from advisor.Client.mt5Client import MetaTrader5Client
 
 
@@ -10,8 +8,7 @@ def test_determine_bar_count_backtest_true():
     assert client._determine_bar_count("1D") == 500
 
 
-@patch("advisor.Client.mt5Client.mt5.account_info")
-def test_get_equity(mock_account_info):
-    mock_account_info.return_value = type("A", (), {"equity": 1234.5})()
+def test_get_acc_attr_reads_account_info():
     client = MetaTrader5Client()
+    client.account_info = {"equity": 1234.5}
     assert client.get_acc_attr("equity") == 1234.5

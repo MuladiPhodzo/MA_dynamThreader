@@ -1,10 +1,9 @@
-import logging
-
 from advisor.Client.mt5Client import MetaTrader5Client
 from advisor.bootstrap.config_loader import ConfigError, UserConfig
 from advisor.bootstrap.state_loader import StateStore
+from advisor.utils.logging_setup import get_logger
 
-logger = logging.getLogger("BOOTSTRAP")
+logger = get_logger("BOOTSTRAP")
 
 
 class BootstrapError(Exception):

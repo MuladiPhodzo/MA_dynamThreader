@@ -1,8 +1,0 @@
-{
-  "version": "1.0",
-  "last_backtest_run": null,
-  "next_backtest_run": null,
-  "backtest_running": false,
-  "live_trading_enabled": true,
-  "symbols": {}
-}

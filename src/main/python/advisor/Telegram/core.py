@@ -1,29 +1,16 @@
 import asyncio
 import requests
-import sys
 import signal
 import threading
 import json
-import logging
 from pathlib import Path
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram import Update
 from .utils.env_loader import load_env
+from advisor.utils.logging_setup import get_logger
 
 import advisor.Client.mt5Client as Client
-# -------------------------
-# Logging Configuration
-# -------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler("MA_DynamAdvisor.log", encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
-
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class TelegramMessenger:
     """Robust, restartable Telegram bot with async-safe control and persistent chat ID."""

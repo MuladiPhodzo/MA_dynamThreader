@@ -2,21 +2,9 @@
 from dotenv import load_dotenv
 from pathlib import Path
 import os, sys
-import logging
+from advisor.utils.logging_setup import get_logger
 
-# -------------------------
-# Logging Configuration
-# -------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler("MA_DynamAdvisor.log", encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
-
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def load_env():
     """Load TELEGRAM_BOT_TOKEN from .env file (root or src/main)."""

@@ -3,7 +3,7 @@
     "pipeline": 1,
     "backtest": 1,
     "strategy": 1,
-    "execution": 1
+    "execution": 3
   },
-  "last_backtest": null
+  "last_backtest": "2026-03-16T09:28:20.089195+00:00"
 }

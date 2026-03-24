@@ -1,113 +1,374 @@
 <div class="layout">
   <header class="topbar">
-    <div class="brand">
-      <div class="logo">MA</div>
-      <div>
-        <div class="title">MovingAverage Advisor</div>
-        <div class="subtitle">Control plane dashboard</div>
+    <div class="header-item">
+      <div class="header-label">Account</div>
+      <div class="header-value">{{ status?.bot_state?.symbols?.length || 0 }} symbols</div>
+      <div class="header-sub">
+        Live trading: {{ status?.bot_state?.live_trading_enabled ? "On" : "Off" }}
       </div>
     </div>
-    <div class="topbar-items">
-      <div class="top-chip">
-        <span class="label">Account</span>
-        <span class="value">{{ status?.bot_state?.symbols?.length || 0 }} symbols</span>
+    <div class="header-item" [class.down]="error">
+      <div class="header-label">Bot Status</div>
+      <div class="header-value">{{ error ? "Disconnected" : status?.bot_state?.state || "Online" }}</div>
+      <div class="header-sub">
+        Backtest: {{ status?.bot_state?.backtest_running ? "Running" : "Idle" }}
       </div>
-      <div class="top-chip" [class.down]="error">
-        <span class="label">Bot Status</span>
-        <span class="value">{{ error ? "Disconnected" : "Online" }}</span>
-      </div>
-      <div class="top-chip">
-        <span class="label">Time</span>
-        <span class="value">{{ lastUpdated || "—" }}</span>
-      </div>
-      <div class="top-chip">
-        <span class="label">User</span>
-        <span class="value">Operator</span>
-      </div>
+    </div>
+    <div class="header-item">
+      <div class="header-label">Time</div>
+      <div class="header-value">{{ lastUpdated || "--" }}</div>
+      <div class="header-sub">Refresh interval: 2s</div>
+    </div>
+    <div class="header-item">
+      <div class="header-label">User</div>
+      <div class="header-value">Operator</div>
+      <div class="header-sub">Role: Control</div>
     </div>
   </header>
 
   <aside class="sidebar">
     <div class="nav-title">Navigation</div>
     <nav class="nav">
-      <button class="nav-item active">Account</button>
-      <button class="nav-item">Symbols</button>
-      <button class="nav-item">Bot</button>
-      <button class="nav-item">Logs</button>
-      <button class="nav-item">Store</button>
-      <button class="nav-item">Support</button>
+      <button class="nav-item" [class.active]="activePanel === 'account'" (click)="setActivePanel('account')">
+        Account
+      </button>
+      <button class="nav-item" [class.active]="activePanel === 'symbols'" (click)="setActivePanel('symbols')">
+        Symbols
+      </button>
+      <button class="nav-item" [class.active]="activePanel === 'bot'" (click)="setActivePanel('bot')">
+        Bot
+      </button>
+      <button class="nav-item" [class.active]="activePanel === 'logs'" (click)="setActivePanel('logs')">
+        Logs
+      </button>
+      <button class="nav-item" [class.active]="activePanel === 'store'" (click)="setActivePanel('store')">
+        Store
+      </button>
+      <button class="nav-item" [class.active]="activePanel === 'support'" (click)="setActivePanel('support')">
+        Support
+      </button>
     </nav>
+
     <div class="sidebar-actions">
+      <div class="nav-title">Quick Actions</div>
       <button class="primary" (click)="reloadConfig()">Reload Config</button>
       <button class="ghost" (click)="runBacktest()">Run Backtest Now</button>
     </div>
   </aside>
 
   <main class="content">
-    <section class="grid">
-      <div class="panel">
-        <h2>Processes</h2>
-        <div class="process-list" *ngIf="status; else loadingBlock">
-          <div class="process-card" *ngFor="let name of processNames()">
-            <div class="process-head">
-              <div>
-                <div class="process-name">{{ name }}</div>
-                <div class="process-state">
-                  <span class="dot" [class.ok]="status?.processes[name]?.running"></span>
-                  {{ status?.processes[name]?.running ? "Running" : "Stopped" }}
-                </div>
-              </div>
-              <div class="health-tag">
-                {{ status?.health[name]?.status || "UNKNOWN" }}
-              </div>
-            </div>
-            <div class="process-meta">
-              <div>PID: {{ status?.processes[name]?.pid || "—" }}</div>
-              <div>Restarts: {{ status?.processes[name]?.restart_count }}</div>
-              <div>Heartbeat: {{ status?.processes[name]?.last_heartbeat || "—" }}</div>
-              <div>Deps: {{ status?.processes[name]?.dependencies?.join(", ") || "none" }}</div>
-            </div>
-            <div class="process-actions">
-              <button (click)="start(name)">Start</button>
-              <button (click)="stop(name)">Stop</button>
-              <button class="ghost" (click)="restart(name)">Restart</button>
-            </div>
+    <section class="content-header">
+      <div>
+        <div class="content-label">Active Panel</div>
+        <div class="content-title">{{ panelMeta.title }}</div>
+        <div class="content-subtitle">{{ panelMeta.subtitle }}</div>
+      </div>
+      <div class="content-meta">
+        <div class="meta-chip">
+          <div class="meta-label">Active</div>
+          <div class="meta-value">{{ activeSymbolCount() }}</div>
+        </div>
+        <div class="meta-chip">
+          <div class="meta-label">Issues</div>
+          <div class="meta-value">{{ issues.length }}</div>
+        </div>
+        <div class="meta-chip" [class.down]="error">
+          <div class="meta-label">Connection</div>
+          <div class="meta-value">{{ error ? "Down" : "Healthy" }}</div>
+        </div>
+      </div>
+    </section>
+
+    <div class="mobile-nav">
+      <label for="panel-select">Navigate</label>
+      <select id="panel-select" [(ngModel)]="activePanel">
+        <option value="account">Account</option>
+        <option value="symbols">Symbols</option>
+        <option value="bot">Bot</option>
+        <option value="logs">Logs</option>
+        <option value="store">Store</option>
+        <option value="support">Support</option>
+      </select>
+    </div>
+
+    <section class="panel" *ngIf="activePanel === 'account'">
+      <div class="panel-header">
+        <h2>Account Historical Data</h2>
+        <span class="panel-tag">Snapshots</span>
+      </div>
+      <div class="account-grid">
+        <div class="card">
+          <div class="card-label">Latest equity</div>
+          <div class="card-value">{{ (accountSummary?.latest || 0) | number: "1.2-2" }}</div>
+          <div class="card-sub">
+            Change: {{ equityChange | number: "1.2-2" }} ({{ equityChangePct | number: "1.1-1" }}%)
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-label">History range</div>
+          <div class="card-value">
+            {{ (accountSummary?.min || 0) | number: "1.2-2" }} -
+            {{ (accountSummary?.max || 0) | number: "1.2-2" }}
+          </div>
+          <div class="card-sub">Points: {{ accountSummary?.count || 0 }}</div>
+        </div>
+        <div class="card">
+          <div class="card-label">History source</div>
+          <div class="card-value">{{ accountHistory?.source || "Unknown" }}</div>
+          <div class="card-sub">Last updated: {{ lastUpdated || "--" }}</div>
+        </div>
+      </div>
+      <div class="history-block">
+        <div class="history-title">Equity Curve</div>
+        <div class="chart-wrap" *ngIf="equitySeries.length; else noHistory">
+          <svg class="chart" viewBox="0 0 240 80" preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="equityGradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="rgba(255, 183, 3, 0.5)" />
+                <stop offset="100%" stop-color="rgba(255, 183, 3, 0.02)" />
+              </linearGradient>
+            </defs>
+            <path class="chart-area" [attr.d]="equityAreaPath" />
+            <polyline class="chart-line" [attr.points]="equityPolyline" />
+          </svg>
+          <div class="chart-legend">
+            <div>Latest: {{ equityLatest | number: "1.2-2" }}</div>
+            <div>Change: {{ equityChange | number: "1.2-2" }} ({{ equityChangePct | number: "1.1-1" }}%)</div>
+          </div>
+        </div>
+        <ng-template #noHistory>
+          <div class="history-placeholder">No account history received yet.</div>
+        </ng-template>
+      </div>
+      <div class="history-block">
+        <div class="history-title">Recent Snapshots</div>
+        <div class="history-placeholder">
+          {{ equitySeries.length ? "" : "Historical snapshots will appear here once the feed is enabled." }}
+        </div>
+        <div class="snapshot-list" *ngIf="equitySeries.length">
+          <div class="snapshot-item" *ngFor="let point of equitySeries.slice(-5)">
+            <div class="snapshot-time">{{ point.timestamp }}</div>
+            <div class="snapshot-value">{{ point.equity | number: "1.2-2" }}</div>
           </div>
         </div>
       </div>
+    </section>
 
-      <div class="panel">
-        <h2>Symbols & Telemetry</h2>
-        <div class="telemetry" *ngIf="status">
-          <div class="telemetry-row header">
-            <div>Symbol</div>
-            <div>Enabled</div>
-            <div>Fetch</div>
-            <div>Signals</div>
-            <div>Trades</div>
-            <div>Errors</div>
-            <div>Last Error</div>
+    <section class="panel" *ngIf="activePanel === 'symbols'">
+      <div class="panel-header">
+        <h2>Symbols &amp; Controls</h2>
+        <span class="panel-tag">Live Telemetry</span>
+      </div>
+      <div class="symbols-toolbar">
+        <div class="field">
+          <label>Search symbols</label>
+          <input
+            type="text"
+            [(ngModel)]="symbolQuery"
+            placeholder="EURUSD, GBPUSD, NAS100"
+          />
+        </div>
+        <div class="field">
+          <label>Status</label>
+          <select [(ngModel)]="symbolFilter">
+            <option value="all">All</option>
+            <option value="active">Active only</option>
+            <option value="inactive">Inactive only</option>
+          </select>
+        </div>
+        <div class="field summary">
+          <label>Showing</label>
+          <div>{{ filteredSymbols().length }} of {{ symbolNames().length }}</div>
+        </div>
+      </div>
+      <div class="telemetry" *ngIf="status; else loadingBlock">
+        <div class="telemetry-row header">
+          <div>Symbol</div>
+          <div>Enabled</div>
+          <div>Fetch</div>
+          <div>Signals</div>
+          <div>Trades</div>
+          <div>Errors</div>
+          <div>Last Error</div>
+        </div>
+        <div class="telemetry-row" *ngFor="let sym of filteredSymbols()">
+          <div class="mono">{{ sym }}</div>
+          <div>
+            <button class="toggle" [class.on]="status?.telemetry[sym]?.enabled" (click)="toggle(sym)">
+              {{ status?.telemetry[sym]?.enabled ? "On" : "Off" }}
+            </button>
           </div>
-          <div class="telemetry-row" *ngFor="let sym of symbolNames()">
-            <div class="mono">{{ sym }}</div>
+          <div>{{ status?.telemetry[sym]?.data_fetch_count }}</div>
+          <div>{{ status?.telemetry[sym]?.signal_count }}</div>
+          <div>{{ status?.telemetry[sym]?.trade_count }}</div>
+          <div>{{ status?.telemetry[sym]?.error_count }}</div>
+          <div class="mono">{{ status?.telemetry[sym]?.last_error || "--" }}</div>
+        </div>
+      </div>
+      <div class="empty" *ngIf="!status">No telemetry yet.</div>
+    </section>
+
+    <section class="panel" *ngIf="activePanel === 'bot'">
+      <div class="panel-header">
+        <h2>Bot Processes</h2>
+        <span class="panel-tag">Health &amp; Control</span>
+      </div>
+      <div class="process-list" *ngIf="status; else loadingBlock">
+        <div class="process-card" *ngFor="let name of processNames()">
+          <div class="process-head">
             <div>
-              <button class="toggle" [class.on]="status?.telemetry[sym]?.enabled" (click)="toggle(sym)">
-                {{ status?.telemetry[sym]?.enabled ? "On" : "Off" }}
-              </button>
+              <div class="process-name">{{ name }}</div>
+              <div class="process-state">
+                <span class="dot" [class.ok]="status?.processes[name]?.running"></span>
+                {{ status?.processes[name]?.running ? "Running" : "Stopped" }}
+              </div>
             </div>
-            <div>{{ status?.telemetry[sym]?.data_fetch_count }}</div>
-            <div>{{ status?.telemetry[sym]?.signal_count }}</div>
-            <div>{{ status?.telemetry[sym]?.trade_count }}</div>
-            <div>{{ status?.telemetry[sym]?.error_count }}</div>
-            <div class="mono">{{ status?.telemetry[sym]?.last_error || "—" }}</div>
+            <div class="health-tag">
+              {{ status?.health[name]?.status || "UNKNOWN" }}
+            </div>
+          </div>
+          <div class="process-meta">
+            <div>PID: {{ status?.processes[name]?.pid || "--" }}</div>
+            <div>Restarts: {{ status?.processes[name]?.restart_count }}</div>
+            <div>Heartbeat: {{ status?.processes[name]?.last_heartbeat || "--" }}</div>
+            <div>Deps: {{ status?.processes[name]?.dependencies?.join(", ") || "none" }}</div>
+          </div>
+          <div class="process-actions">
+            <button (click)="start(name)">Start</button>
+            <button (click)="stop(name)">Stop</button>
+            <button class="ghost" (click)="restart(name)">Restart</button>
           </div>
         </div>
-        <div class="empty" *ngIf="!status">No telemetry yet.</div>
+      </div>
+    </section>
+
+    <section class="panel" *ngIf="activePanel === 'logs'">
+      <div class="panel-header">
+        <h2>Issue Logs</h2>
+        <span class="panel-tag">Alerts</span>
+      </div>
+      <div class="log-filters">
+        <div class="field">
+          <label>Search logs</label>
+          <input type="text" [(ngModel)]="logQuery" placeholder="Process, symbol, error" />
+        </div>
+        <div class="field">
+          <label>Severity</label>
+          <select [(ngModel)]="logSeverity">
+            <option value="all">All</option>
+            <option value="critical">Critical</option>
+            <option value="warn">Warn</option>
+            <option value="info">Info</option>
+          </select>
+        </div>
+        <div class="field summary">
+          <label>Matching</label>
+          <div>{{ filteredIssues().length }} of {{ issues.length }}</div>
+        </div>
+      </div>
+      <div class="log-list" *ngIf="filteredIssues().length; else noIssues">
+        <div class="log-item" *ngFor="let issue of filteredIssues()">
+          <div
+            class="log-severity"
+            [class.critical]="issue.severity === 'critical'"
+            [class.warn]="issue.severity === 'warn'"
+          >
+            {{ issue.severity }}
+          </div>
+          <div class="log-body">
+            <div class="log-title">{{ issue.title }}</div>
+            <div class="log-detail">{{ issue.detail }}</div>
+          </div>
+          <div class="log-time">{{ issue.time || "--" }}</div>
+        </div>
+      </div>
+      <ng-template #noIssues>
+        <div class="empty">No issues match the current filters.</div>
+      </ng-template>
+    </section>
+
+    <section class="panel" *ngIf="activePanel === 'store'">
+      <div class="panel-header">
+        <h2>Store</h2>
+        <span class="panel-tag">Placeholder</span>
+      </div>
+      <div class="empty">Store modules will live here.</div>
+    </section>
+
+    <section class="panel" *ngIf="activePanel === 'support'">
+      <div class="panel-header">
+        <h2>Support</h2>
+        <span class="panel-tag">Customer Care</span>
+      </div>
+      <div class="support-grid">
+        <div class="card">
+          <div class="card-label">Support status</div>
+          <div class="card-value">Online</div>
+          <div class="card-sub">Average response under 5 minutes.</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Preferred channel</div>
+          <div class="card-value">Ticket Desk</div>
+          <div class="card-sub">Create a support ticket to get started.</div>
+        </div>
+      </div>
+      <form class="support-form" (ngSubmit)="submitSupportTicket()">
+        <div class="field">
+          <label>Name</label>
+          <input type="text" [(ngModel)]="supportForm.name" name="name" placeholder="Operator name" />
+        </div>
+        <div class="field">
+          <label>Email</label>
+          <input type="email" [(ngModel)]="supportForm.email" name="email" placeholder="you@domain.com" />
+        </div>
+        <div class="field">
+          <label>Subject</label>
+          <input
+            type="text"
+            [(ngModel)]="supportForm.subject"
+            name="subject"
+            placeholder="Describe the issue"
+            required
+          />
+        </div>
+        <div class="field">
+          <label>Priority</label>
+          <select [(ngModel)]="supportForm.priority" name="priority">
+            <option value="low">Low</option>
+            <option value="normal">Normal</option>
+            <option value="high">High</option>
+            <option value="urgent">Urgent</option>
+          </select>
+        </div>
+        <div class="field full">
+          <label>Message</label>
+          <textarea
+            rows="5"
+            [(ngModel)]="supportForm.message"
+            name="message"
+            placeholder="Provide steps, errors, and what you expect"
+            required
+          ></textarea>
+        </div>
+        <div class="support-actions">
+          <button class="primary" type="submit" [disabled]="supportSubmitting">Open Ticket</button>
+          <button class="ghost" type="button" (click)="loadSupportKb()">View Knowledge Base</button>
+        </div>
+      </form>
+      <div class="support-status" *ngIf="supportStatus">{{ supportStatus }}</div>
+      <div class="support-error" *ngIf="supportError">{{ supportError }}</div>
+      <div class="kb-list" *ngIf="kbLoading">Loading knowledge base...</div>
+      <div class="kb-list" *ngIf="!kbLoading && kbArticles.length">
+        <div class="kb-item" *ngFor="let article of kbArticles">
+          <div class="kb-tag">{{ article.tag }}</div>
+          <div class="kb-title">{{ article.title }}</div>
+          <div class="kb-summary">{{ article.summary }}</div>
+        </div>
       </div>
     </section>
   </main>
 
   <ng-template #loadingBlock>
-    <div class="empty">Loading status…</div>
+    <div class="empty">Loading status...</div>
   </ng-template>
 </div>

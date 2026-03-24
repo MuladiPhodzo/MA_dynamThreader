@@ -1,32 +1,25 @@
 import asyncio
-import logging
-import sys
 from datetime import datetime, timedelta, timezone
 
 from advisor.Trade.RiskManager import RiskManager
 from advisor.Trade.tradeHandler import mt5TradeHandler
 from advisor.Trade.trateState import TradeStateManager
 from advisor.core.health_bus import HealthBus
+from advisor.core.event_bus import EventBus
+from advisor.core import events
 from advisor.core.state import BotLifecycle, StateManager
 from advisor.indicators.signal_store import SignalStore
 from advisor.scheduler.process_sceduler import ProcessScheduler
 from advisor.scheduler.requirements import ProcessRequirement
 from advisor.scheduler.resource_registry import ResourceRegistry
 from advisor.Client.symbols.symbol_watch import SymbolWatch
+from advisor.utils.logging_setup import get_logger
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler("MA_DynamAdvisor.log", encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
-
-logger = logging.getLogger("Trade_Executor")
+logger = get_logger("Trade_Executor")
 
 EXECUTION_REQS = [
     ProcessRequirement("signals", max_age=timedelta(minutes=2)),
+    ProcessRequirement("symbol_ingestion", max_age=timedelta(minutes=5)),
 ]
 
 
@@ -46,6 +39,8 @@ class ExecutionProcess:
         symbol_watch: SymbolWatch,
         state: TradeStateManager | None = None,
         interval=2,
+        event_bus: EventBus | None = None,
+        state_store=None,
     ):
         self.client = client
         self.signal_store = signal_store
@@ -59,6 +54,11 @@ class ExecutionProcess:
         self.trade_state = state or TradeStateManager(self.client)
         self.state_manager = state_manager
         self.processed_signals = set()
+        self.event_bus = event_bus
+        self.state_store = state_store
+        self._last_idle_beat: datetime | None = None
+        if self.state_store is not None:
+            self.processed_signals = self.state_store.load_processed_signals()
 
         self.risk_manager = RiskManager(
             client=self.client,
@@ -78,16 +78,40 @@ class ExecutionProcess:
             raise
 
     async def _safe_execute(self):
-        while not self.stop_event.is_set():
-            await self.scheduler.schedule(
-                process_name=self.name,
-                required_resources=EXECUTION_REQS,
-                task=self._execution_cycle,
-                shutdown_event=self.stop_event,
-                heartbeats=self.heartbeats,
-                timeout=30,
-            )
-            await asyncio.sleep(self.interval)
+        if self.event_bus is None:
+            raise RuntimeError("Event bus not configured for execution process")
+
+        sub = self.event_bus.subscribe(events.SIGNALS_READY)
+        try:
+            while not self.stop_event.is_set():
+                evt = await sub.next(stop_event=self.stop_event, timeout=1.0)
+                if evt is None:
+                    self._idle_heartbeat()
+                    continue
+                await self.scheduler.schedule(
+                    process_name=self.name,
+                    required_resources=EXECUTION_REQS,
+                    task=self._execution_cycle,
+                    shutdown_event=self.stop_event,
+                    heartbeats=self.heartbeats,
+                    timeout=30,
+                )
+        finally:
+            sub.close()
+
+    def _idle_heartbeat(self) -> None:
+        now = datetime.now(timezone.utc)
+        if self._last_idle_beat and now - self._last_idle_beat < timedelta(seconds=30):
+            return
+        self._last_idle_beat = now
+        self.heartbeats[self.name] = now.isoformat()
+        self.health_bus.update(
+            self.name,
+            "IDLE",
+            {
+                "telemetry": self.symbol_watch.snapshot(),
+            },
+        )
 
     async def _execution_cycle(self):
         executed = 0
@@ -122,6 +146,8 @@ class ExecutionProcess:
                 self.symbol_watch.mark_error(symbol, f"trade failed: {e}")
 
         self.heartbeats[self.name] = datetime.now(timezone.utc).isoformat()
+        if self.state_store is not None:
+            self.state_store.save_processed_signals(self.processed_signals)
         self.health_bus.update(
             self.name,
             "RUNNING",

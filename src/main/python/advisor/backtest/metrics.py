@@ -14,7 +14,7 @@ class metrics:
         self.symbol = symbol_state
         pass
 
-    def clamp(value, min_v=0.0, max_v=1.0):
+    def clamp(self, value, min_v=0.0, max_v=1.0):
         return max(min_v, min(value, max_v))
 
     def normalize(self, value, min_v, max_v):
@@ -34,12 +34,18 @@ class metrics:
         }
         """
 
-        self.symbol.score += WEIGHTS["win_rate"] * self.normalize(stats["win_rate"], 0.4, 0.8)
-        self.symbol.score += WEIGHTS["profit_factor"] * self.normalize(stats["profit_factor"], 1.0, 3.0)
-        self.symbol.score += WEIGHTS["expectancy"] * self.normalize(stats["expectancy"], 0.0, 0.01)
-        self.symbol.score += WEIGHTS["total_trades"] * self.normalize(stats["total_trades"], 30, 300)
+        win_rate = stats.get("win_rate", 0.0)
+        profit_factor = stats.get("profit_factor", 0.0)
+        expectancy = stats.get("expectancy", 0.0)
+        total_trades = stats.get("total_trades", 0.0)
+        max_drawdown = stats.get("max_drawdown", stats.get("max_drawdown_%", 0.0))
+
+        self.symbol.score += WEIGHTS["win_rate"] * self.normalize(win_rate, 0.4, 0.8)
+        self.symbol.score += WEIGHTS["profit_factor"] * self.normalize(profit_factor, 1.0, 3.0)
+        self.symbol.score += WEIGHTS["expectancy"] * self.normalize(expectancy, 0.0, 0.01)
+        self.symbol.score += WEIGHTS["total_trades"] * self.normalize(total_trades, 30, 300)
 
         # Drawdown is inverse (lower is better)
-        self.symbol.score += WEIGHTS["max_drawdown"] * (1 - self.normalize(stats["max_drawdown"], 0.05, 0.30))
+        self.symbol.score += WEIGHTS["max_drawdown"] * (1 - self.normalize(max_drawdown, 0.05, 0.30))
 
         self.symbol.score = round(self.symbol.score, 4)

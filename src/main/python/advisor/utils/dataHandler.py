@@ -1,31 +1,18 @@
 import os
 from pathlib import Path
-import sys
 import csv
 import json
-import logging
 import threading
 import time
 import matplotlib.pyplot as plt
 
 from advisor.utils.cache_handler import CacheManager
+from advisor.utils.logging_setup import get_logger
 import pandas as pd
 import datetime
 from typing import Any, Dict, Optional
 
-# -------------------------
-# Logging Configuration
-# -------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler("MA_DynamAdvisor.log", encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
-
-logger = logging.getLogger("Data_store")
+logger = get_logger("Data_store")
 
 class DataHandler:
 
@@ -40,8 +27,12 @@ class DataHandler:
         self.all_timestamps: set = set()
 
         self.lock = threading.RLock()
+        self.process_lock = threading.RLock()
+        self.thread_lock = threading.RLock()
+        self.file_lock = threading.RLock()
 
         self.base_dir = Path("data") / strategy / symbol
+        self.dir_name = str(self.base_dir)
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
         # start background workers
@@ -57,6 +48,15 @@ class DataHandler:
 
         self.fetch_thread.start()
         self.save_thread.start()
+        self._prime_cache()
+
+    def _prime_cache(self):
+        try:
+            data = self.cache.get(self.symbol)
+            if data:
+                self.set_data(data)
+        except Exception:
+            logger.exception(f"Initial cache load failed for {self.symbol}")
 
     def update(self, tf: str, df: pd.DataFrame):
         if df is None or df.empty:
@@ -155,7 +155,17 @@ class DataHandler:
         return snap
 
     def common_timestamps(self):
-        return sorted(set.intersection(*self.all_timestamps)) if self.all_timestamps else []
+        frames = [
+            df.index
+            for df in self.data.values()
+            if isinstance(df, pd.DataFrame) and not df.empty
+        ]
+        if not frames:
+            return []
+        common = set(frames[0])
+        for idx in frames[1:]:
+            common &= set(idx)
+        return sorted(common)
 
     def persist_tail(self, tf, path, rows=1):
         df = self.data.get(tf)
@@ -186,7 +196,7 @@ class DataHandler:
             trade_data (dict): Trade details to save.
             file_type (str): 'json' or 'csv'.
         """
-        def _toJSON(self, file_path, trade_data, timestamp):
+        def _toJSON(file_path, trade_data, timestamp):
             """Helper method for JSON saving"""
             entry = {"timestamp": timestamp, **trade_data}
 
@@ -234,7 +244,7 @@ class DataHandler:
             else:
                 raise ValueError("Unsupported file type. Use 'json' or 'csv'.")
 
-    def save_data_toCSVFile(self, data, file_path: Path):
+    def save_data_toCSVFile(self, data, file_path: Path | str):
         import tabulate
         """
         Save data to a CSV + formatted TXT table.
@@ -250,22 +260,23 @@ class DataHandler:
 
         df = pd.DataFrame(data)
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        path = Path(file_path)
         # Auto-create folder if it doesn't exist
-        os.makedirs(self.dir_name, exist_ok=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
 
         with self.file_lock:
             with self.thread_lock:
-                file_exists = os.path.exists(file_path)
+                file_exists = path.exists()
 
                 # ============================
                 # 1️⃣ SAVE RAW CSV
                 # ============================
                 if file_exists:
-                    logger.info(f"Appending to CSV: {file_path}")
-                    df.to_csv(file_path, index=False, mode='a', header=False)
+                    logger.info(f"Appending to CSV: {path}")
+                    df.to_csv(path, index=False, mode='a', header=False)
                 else:
-                    logger.info(f"Creating CSV: {file_path}")
-                    df.to_csv(file_path, index=False, mode='w', header=True)
+                    logger.info(f"Creating CSV: {path}")
+                    df.to_csv(path, index=False, mode='w', header=True)
 
                 # ============================
                 # 2️⃣ SAVE PRETTY TABLE (TXT)
@@ -273,7 +284,7 @@ class DataHandler:
 
                 pretty_text = tabulate.tabulate(df, headers='keys', tablefmt='pretty', showindex=False)
 
-                table_path = file_path.replace(".csv", "_pretty.txt")
+                table_path = path.with_name(f"{path.stem}_pretty.txt")
 
                 with open(table_path, "a", encoding="utf-8") as f:
                     f.write(f"Timestamp: {timestamp}\n")
@@ -310,7 +321,9 @@ class DataHandler:
             except Exception:
                 logger.exception("Cache fetch failed")
 
-            time.sleep(300)
+            ttl = getattr(self.cache, "ttl", 180)
+            sleep_s = max(15, min(int(ttl / 2), 120))
+            time.sleep(sleep_s)
 
     def _auto_save(self):
         while True:
@@ -330,8 +343,18 @@ class DataHandler:
                 logger.exception("Auto save failed")
 
     # ---------------- internal paths ---------------- #
+    def _data_path(self, symbol: str) -> Path:
+        safe_symbol = symbol or self.symbol
+        return self.base_dir / f"{safe_symbol}_data.json"
+
+    def _meta_path(self, symbol: str) -> Path:
+        safe_symbol = symbol or self.symbol
+        return self.base_dir / f"{safe_symbol}_meta.json"
+
     def _symbol_dir(self, symbol):
-        return Path(f"{self.dir_name}_{symbol}")
+        if symbol == self.symbol:
+            return self.base_dir
+        return self.base_dir.parent / symbol
 
     class DataPlotter:
         @staticmethod

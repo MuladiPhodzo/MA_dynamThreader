@@ -26,7 +26,7 @@ class SymbolTelemetry:
 class SymbolWatch:
     def __init__(self, botState: BotState):
         self.bot = botState
-        self.all_symbols: list[SymbolState] = list(self.bot.symbols or [])
+        self.all_symbols: list[SymbolState] = list(self.bot.symbols)
         self.active_symbols: list[SymbolState] = []
         self.telemetry: dict[str, SymbolTelemetry] = {}
         self.activate_symbols()

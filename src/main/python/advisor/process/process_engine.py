@@ -1,8 +1,6 @@
 import json
 import os
-import logging
 import signal
-import sys
 import time
 import threading
 from dataclasses import dataclass, field
@@ -14,17 +12,9 @@ from advisor.core import dependency_graph, health_bus
 from advisor.core.state import BotLifecycle, StateManager
 from advisor.process.heartbeats import HeartbeatRegistry
 from advisor.scheduler.resource_registry import ResourceRegistry
+from advisor.utils.logging_setup import get_logger
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler("MA_DynamAdvisor.log", encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
-
-logger = logging.getLogger("Orchestrator")
+logger = get_logger("Orchestrator")
 
 
 @dataclass
@@ -215,6 +205,10 @@ class Supervisor:
                     pass
             if proc.process and proc.process.is_alive():
                 proc.process.join(timeout=10)
+        try:
+            self._persist_state()
+        except Exception:
+            logger.exception("Failed to persist supervisor state during shutdown")
         self.state_manager.set_state(BotLifecycle.STOPPED)
 
     def monitor(self) -> None:

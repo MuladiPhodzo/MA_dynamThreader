@@ -1,19 +1,12 @@
-import os, sys, json, time, psutil, logging
+import json
+import os
+import time
 
-# -------------------------
-# Logging Configuration
-# -------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler("MA_DynamAdvisor.log", encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
+import psutil
+from advisor.utils.logging_setup import get_logger
 
-logger = logging.getLogger(__name__)
-LOCK_FILE = "MA_DynamAdvisor.lock"
+logger = get_logger(__name__)
+LOCK_FILE = "__main__.lock"
 
 def check_and_create_lock():
     if os.path.exists(LOCK_FILE):

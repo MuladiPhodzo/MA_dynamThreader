@@ -1,8 +1,6 @@
 import threading
 
 import time
-import sys
-import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import datetime
 from tkinter import messagebox
@@ -10,21 +8,10 @@ from tkinter import messagebox
 import pandas as pd
 from pandas.plotting import register_matplotlib_converters
 import MetaTrader5 as mt5
+from advisor.utils.logging_setup import get_logger
 register_matplotlib_converters()
 
-# -------------------------
-# Logging Configuration
-# -------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler("MA_DynamAdvisor.log", encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
-
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class MetaTrader5Client:
     def __init__(self):
@@ -36,12 +23,14 @@ class MetaTrader5Client:
         self.backtest = True
 
         self._tf_last_fetch = {}      # {(symbol, tf): datetime}
-        self._symbol_lock = threading.Lock()
+        self._symbol_lock = threading.RLock()
+        self._select_lock = threading.Lock()
+        self._selected_symbols: set[str] = set()
 
         self.account_info = None
 
         self.TF_dict = {
-            '5M': {"tf_val": mt5.TIMEFRAME_M5, "prox_limit": 100, "interval_minutese": 5},
+            '5M': {"tf_val": mt5.TIMEFRAME_M5, "prox_limit": 100, "interval_minutes": 5},
             '15M': {"tf_val": mt5.TIMEFRAME_M15, "prox_limit": 100, "interval_minutes": 15},
             '30M': {"tf_val": mt5.TIMEFRAME_M30, "prox_limit": 100, "interval_minutes": 30},
             '1H': {"tf_val": mt5.TIMEFRAME_H1, "prox_limit": 150, "interval_minutes": 60},
@@ -125,9 +114,24 @@ class MetaTrader5Client:
         return True
 
     def get_Symbols(self):
-        all_symbols = mt5.symbols_get()
+        all_symbols = mt5.symbols_get() or []
+        forex_modes = {
+            getattr(mt5, "SYMBOL_CALC_MODE_FOREX", None),
+            getattr(mt5, "SYMBOL_CALC_MODE_FOREX_NO_LEVERAGE", None),
+        }
+        disabled_mode = getattr(mt5, "SYMBOL_TRADE_MODE_DISABLED", None)
         symbols = []
         for symbol in all_symbols:
+            calc_mode = getattr(symbol, "trade_calc_mode", None)
+            trade_mode = getattr(symbol, "trade_mode", None)
+            path = (getattr(symbol, "path", "") or "").lower()
+            is_forex = calc_mode in forex_modes or "forex" in path or "fx" in path
+            if not is_forex:
+                continue
+            if disabled_mode is not None and trade_mode == disabled_mode:
+                continue
+            if not self._ensure_symbol_selected(symbol.name):
+                continue
             symbols.append(symbol.name)
         return symbols
 
@@ -154,7 +158,7 @@ class MetaTrader5Client:
         data = pd.DataFrame()
         rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, bars)
         if rates is None:
-            logger.info(f"Failed to get data for {symbol}")
+            logger.info(f"Failed to get data for {symbol} (error={mt5.last_error()})")
             return None
 
         data = pd.concat([pd.DataFrame(rates)])
@@ -164,15 +168,14 @@ class MetaTrader5Client:
         return data
 
     def _should_fetch_tf(self, symbol: str, tf_name: str) -> bool:
-
-        from datetime import datetime, timedelta
         """
         Check if timeframe interval has elapsed.
         """
+        from datetime import datetime, timedelta, timezone
         interval = self.TF_dict[tf_name]["interval_minutes"]
 
         key = (symbol, tf_name)
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.now(timezone.utc)
 
         with self._symbol_lock:
             last_fetch = self._tf_last_fetch.get(key)
@@ -195,42 +198,63 @@ class MetaTrader5Client:
         Returns:
             dict[str, pd.DataFrame] or None
         """
-        with self._symbol_lock:
-            logger.info(f"⏳ Checking timeframes for {symbol}...")
+        if not self._ensure_symbol_selected(symbol):
+            return None
 
-            futures = {}
-            results: dict[str, pd.DataFrame] = {}
+        logger.info("Checking timeframes for %s...", symbol)
 
-            for tf_name, tf_meta in self.TF_dict.items():
-                if not self._should_fetch_tf(symbol, tf_name):
-                    continue
+        futures = {}
+        results: dict[str, pd.DataFrame] = {}
 
-                futures[self.data_executor.submit(
-                    self.get_live_data,
-                    symbol,
-                    tf_meta["tf_val"],
-                    self._determine_bar_count(tf_name)
-                )] = tf_name
+        for tf_name, tf_meta in self.TF_dict.items():
+            if not self._should_fetch_tf(symbol, tf_name):
+                continue
 
-                # Gentle MT5 pacing
-                time.sleep(0.15)
+            futures[self.data_executor.submit(
+                self.get_live_data,
+                symbol,
+                tf_meta["tf_val"],
+                self._determine_bar_count(tf_name)
+            )] = tf_name
 
-            if not futures:
-                logger.debug(f"⏭ No TF intervals elapsed for {symbol}")
-                return None
+            # Gentle MT5 pacing
+            time.sleep(0.15)
 
-            for future in as_completed(futures):
-                tf_name = futures[future]
-                try:
-                    df = future.result()
-                    results[tf_name] = pd.DataFrame(df)
-                except Exception as e:
-                    logger.exception(f"❌ {symbol} {tf_name} fetch failed: {e}")
+        if not futures:
+            logger.debug("No TF intervals elapsed for %s", symbol)
+            return None
 
-            if results:
-                logger.info(f"✅ Updated TFs for {symbol}: {list(results.keys())}")
+        for future in as_completed(futures):
+            tf_name = futures[future]
+            try:
+                df = future.result()
+                results[tf_name] = pd.DataFrame(df)
+            except Exception as e:
+                logger.exception("%s %s fetch failed: %s", symbol, tf_name, e)
 
-            return results
+        if results:
+            logger.info("Updated TFs for %s: %s", symbol, list(results.keys()))
+
+
+        return results
+
+    def _ensure_symbol_selected(self, symbol: str) -> bool:
+        with self._select_lock:
+            if symbol in self._selected_symbols:
+                return True
+
+            info = mt5.symbol_info(symbol)
+            if info is None:
+                logger.warning("Symbol %s not found in MT5", symbol)
+                return False
+
+            if not getattr(info, "visible", False):
+                if not mt5.symbol_select(symbol, True):
+                    logger.warning("Failed to select %s in Market Watch (error=%s)", symbol, mt5.last_error())
+                    return False
+
+            self._selected_symbols.add(symbol)
+            return True
 
     def close(self):
         """ Close the MT5 connection.
@@ -238,3 +262,4 @@ class MetaTrader5Client:
         mt5.shutdown()
         logger.info("🔌 Disconnected from MetaTrader 5.")
         return False
+

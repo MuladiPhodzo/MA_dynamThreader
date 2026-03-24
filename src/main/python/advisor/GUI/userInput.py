@@ -8,24 +8,12 @@ import queue
 import sys
 import json
 import os
-import logging
+from advisor.utils.logging_setup import get_logger
 from advisor.Trade.tradeStats import TradeStats as Stats
 from advisor.Client.mt5Client import MetaTrader5Client
 CONFIG_FILE = "configs.json"
 
-# -------------------------
-# Logging Configuration
-# -------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler("MA_DynamAdvisor.log", encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
-
-logger = logging.getLogger("SetUp Wizard")
+logger = get_logger("SetUp Wizard")
 # ==========================================================
 #                   MAIN SETUP WINDOW
 # ==========================================================

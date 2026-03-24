@@ -24,7 +24,7 @@ def test_risk_manager_allows_valid_trade():
     client = DummyClient()
     risk = RiskManager(
         client=client,
-        trade_state=TradeStateManager(),
+        trade_state=TradeStateManager(client),
         state_manager=StateManager(),
         health_bus=HealthBus(manager),
     )

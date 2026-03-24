@@ -5,7 +5,7 @@ import time
 
 class CacheManager:
 
-    def __init__(self, ttl: int = 180):
+    def __init__(self, ttl: int = 600):
         self.ttl = ttl
         self.memory: Dict[str, Any] = {}
         self.timestamps: Dict[str, float] = {}
@@ -17,6 +17,10 @@ class CacheManager:
         with self.lock:
             self.memory[key] = value
             self.timestamps[key] = time.time()
+
+    def set_atomic(self, key: str, value: Any):
+        # Kept for compatibility with pipeline; just a thread-safe set.
+        self.set(key, value)
 
     def get(self, key: str):
 
