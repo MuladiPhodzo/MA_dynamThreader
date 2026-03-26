@@ -57,7 +57,7 @@ class MetaTrader5Client:
         else:
             return 100
 
-    def initialize(self, user_data):
+    def initialize(self, user_data, fetch_symbols: bool = True):
         logger.info("🔑 Logging in to MetaTrader 5...")
         try:
 
@@ -75,8 +75,11 @@ class MetaTrader5Client:
                 self.account_info = mt5.account_info()._asdict()
                 self.terminal_info = mt5.terminal_info()._asdict()
                 self.creds = user_data
-                logger.info('fetching all available symbols...')
-                self.symbols = self.get_Symbols()
+                if fetch_symbols:
+                    logger.info('fetching all available symbols...')
+                    self.symbols = self.get_Symbols()
+                else:
+                    logger.info("Skipping symbol fetch on init (deferred).")
                 return True
         except ConnectionError as e:
             logger.critical(f"Connection to Metatrader terminal refused with: {e}")
@@ -122,6 +125,10 @@ class MetaTrader5Client:
         disabled_mode = getattr(mt5, "SYMBOL_TRADE_MODE_DISABLED", None)
         symbols = []
         for symbol in all_symbols:
+            name = getattr(symbol, "name", "") or ""
+            if len(name) < 6:
+                # Filter out non-tradable headers like "AUD"
+                continue
             calc_mode = getattr(symbol, "trade_calc_mode", None)
             trade_mode = getattr(symbol, "trade_mode", None)
             path = (getattr(symbol, "path", "") or "").lower()
@@ -129,6 +136,9 @@ class MetaTrader5Client:
             if not is_forex:
                 continue
             if disabled_mode is not None and trade_mode == disabled_mode:
+                continue
+            point = getattr(symbol, "point", 0) or 0
+            if point <= 0:
                 continue
             if not self._ensure_symbol_selected(symbol.name):
                 continue
@@ -222,7 +232,7 @@ class MetaTrader5Client:
 
         if not futures:
             logger.debug("No TF intervals elapsed for %s", symbol)
-            return None
+            return {}
 
         for future in as_completed(futures):
             tf_name = futures[future]
@@ -232,11 +242,12 @@ class MetaTrader5Client:
             except Exception as e:
                 logger.exception("%s %s fetch failed: %s", symbol, tf_name, e)
 
+        if not results:
+            return None
+
         if results:
             logger.info("Updated TFs for %s: %s", symbol, list(results.keys()))
-
-
-        return results
+            return results
 
     def _ensure_symbol_selected(self, symbol: str) -> bool:
         with self._select_lock:

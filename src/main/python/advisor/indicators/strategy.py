@@ -9,7 +9,6 @@ from advisor.core.state import BotLifecycle, StateManager, Strategy, SymbolState
 from advisor.indicators.signal_store import SignalStore
 from advisor.scheduler.process_sceduler import ProcessScheduler
 from advisor.scheduler.requirements import ProcessRequirement
-from advisor.scheduler.resource_registry import ResourceRegistry
 from advisor.utils import dataHandler
 from advisor.Client.symbols.symbol_watch import SymbolWatch
 from advisor.utils.logging_setup import get_logger
@@ -18,161 +17,156 @@ logger = get_logger("Strategy_Manager")
 
 STRATEGY_REQS = [
     ProcessRequirement("market_data", max_age=timedelta(minutes=5)),
-    ProcessRequirement("symbol_ingestion", max_age=timedelta(minutes=5)),
+    ProcessRequirement("symbols", max_age=timedelta(minutes=5)),
 ]
-class strategyManager:
+
+class StrategyManager:
     name = "strategy"
 
     def __init__(
         self,
-        client,
-        cache_handler: dataHandler.CacheManager,
+        scheduler: ProcessScheduler,
+        event_bus: EventBus,
         shutdown_event: threading.Event,
         heartbeats: dict,
         health_bus: HealthBus,
-        registry: ResourceRegistry,
-        scheduler: ProcessScheduler,
-        store: SignalStore,
-        state: StateManager,
+        cache_handler: dataHandler.CacheManager,
         symbol_watch: SymbolWatch,
-        interval=5,
-        event_bus: EventBus | None = None,
-        state_store=None,
+        store: SignalStore,
+        state_manager: StateManager,
     ):
-        self.client = client
-        self.cache = cache_handler
-        self.registry = registry
         self.scheduler = scheduler
-        self.signal_store = store
-        self.state = state
-        self.symbol_watch = symbol_watch
-        self._warmup_logs: dict[str, datetime] = {}
-
-        self.health_bus = health_bus
-        self.heartbeats = heartbeats
-        self.stop_event = shutdown_event
-        self.interval = interval
         self.event_bus = event_bus
-        self.state_store = state_store
-        self._last_idle_beat: datetime | None = None
+        self.stop_event = shutdown_event
+        self.heartbeats = heartbeats
+        self.health_bus = health_bus
+        self.cache = cache_handler
+        self.symbol_watch = symbol_watch
+        self.signal_store = store
 
-        self.registry.register("signals")
+        self.state = state_manager
 
-    def start(self):
-        try:
-            asyncio.run(self._safe_execute())
-        except Exception as e:
-            self.state.set_state(BotLifecycle.DEGRADED)
-            logger.critical("%s crashed: %s", self.name, e, exc_info=True)
-            self.health_bus.update(self.name, "CRASHED", {"error": str(e)})
-            raise
+        self._running: set[str] = set()  # prevent duplicate runs per symbol
 
-    async def _safe_execute(self):
-        if self.event_bus is None:
-            raise RuntimeError("Event bus not configured for strategy process")
+    # -------------------------------------------------
+    # Registration (NO LOOP)
+    # -------------------------------------------------
 
-        sub = self.event_bus.subscribe(events.MARKET_DATA_READY)
-        try:
-            while not self.stop_event.is_set():
-                evt = await sub.next(stop_event=self.stop_event, timeout=1.0)
-                if evt is None:
-                    self._idle_heartbeat()
-                    continue
-                await self.scheduler.schedule(
-                    process_name=self.name,
-                    required_resources=STRATEGY_REQS,
-                    task=self._run_cycle,
-                    shutdown_event=self.stop_event,
-                    heartbeats=self.heartbeats,
-                    timeout=400,
-                )
-        finally:
-            sub.close()
+    def register(self):
+        """
+        Subscribe per-symbol to market data events.
+        """
+        for symbol in self.symbol_watch.all_symbol_names():
+            self.event_bus.subscribe(
+                f"{events.MARKET_DATA_READY}:{symbol}",
+                lambda evt, s=symbol: asyncio.create_task(self._on_market_data(s, evt)),
+            )
 
-    def _idle_heartbeat(self) -> None:
-        now = datetime.now(timezone.utc)
-        if self._last_idle_beat and now - self._last_idle_beat < timedelta(seconds=30):
+    # -------------------------------------------------
+    # Event Handler
+    # -------------------------------------------------
+
+    async def _on_market_data(self, symbol: str, event):
+        if self.stop_event.is_set():
             return
-        self._last_idle_beat = now
-        self.heartbeats[self.name] = now.isoformat()
-        self.health_bus.update(
-            self.name,
-            "IDLE",
-            {
-                "telemetry": self.symbol_watch.snapshot(),
-                "warmup_pending": self._count_warmup_pending(),
-            },
-        )
 
-    async def _run_cycle(self):
+        if symbol in self._running:
+            return  # prevent overlap
+
+        self._running.add(symbol)
+
+        try:
+            self.state.bot.state.value = BotLifecycle.RUNNING_BACKTEST
+            await self.scheduler.schedule(
+                process_name=f"{self.name}:{symbol}",
+                required_resources=[],  # event-driven → no gating
+                task=lambda: self._run_symbol(symbol),
+                shutdown_event=self.stop_event,
+                heartbeats=self.heartbeats,
+                timeout=120,
+            )
+        except Exception as e:
+            self.state.bot.state.value = BotLifecycle.DEGRADED
+            self.health_bus.update(f"{self.name}:{symbol}", "ERROR", {"error": str(e)})
+            logger.exception("Failed to schedule strategy for %s: %s", symbol, e)
+            self.symbol_watch.mark_error(symbol, f"scheduling failed: {e}")
+        finally:
+            self._running.discard(symbol)
+
+    # -------------------------------------------------
+    # Per-Symbol Execution (CORE LOGIC)
+    # -------------------------------------------------
+
+    async def _run_symbol(self, symbol: str):
+        state = self.symbol_watch.get(symbol)
+
+        if state is None:
+            return
+
+        if not self._symbol_ready(state):
+            self._log_warmup(symbol)
+            return
+
         produced = 0
-        for symbol in self.symbol_watch.active_symbols:
-            if not self._symbol_ready(symbol):
-                self._log_warmup(symbol.symbol)
-                continue
-            for s in symbol.strategies:
-                payload = await asyncio.to_thread(self._build_signal, symbol.symbol, s)
+
+        for strat in state.strategies:
+            try:
+                payload = await asyncio.to_thread(
+                    self._build_signal, symbol, strat
+                )
+
                 if payload is None:
                     continue
+
                 self.signal_store.add_signal(payload)
-                self.symbol_watch.mark_signal(symbol)
+                self.symbol_watch.mark_signal(state)
                 produced += 1
 
-        self.registry.set_ready("signals")
-        self.heartbeats[self.name] = datetime.now(timezone.utc).isoformat()
-        if self.state_store is not None and produced:
-            self.state_store.save_signal_store(self.signal_store)
-        if self.event_bus is not None:
-            self.event_bus.emit(
-                events.SIGNALS_READY,
-                {
-                    "signals": produced,
-                    "telemetry": self.symbol_watch.snapshot(),
-                    "warmup_pending": self._count_warmup_pending(),
-                },
-            )
+                # 🔥 Emit per-symbol signal
+                await self.event_bus.publish(
+                    f"{events.SIGNAL_GENERATED}:{symbol}",
+                    payload,
+                )
+
+            except Exception as e:
+                logger.exception("Strategy failed for %s: %s", symbol, e)
+                self.symbol_watch.mark_error(symbol, str(e))
+
+        # heartbeat
+        self.heartbeats[f"{self.name}:{symbol}"] = datetime.now(timezone.utc).isoformat()
+
+        # health update
         self.health_bus.update(
-            self.name,
+            f"{self.name}:{symbol}",
             "RUNNING",
             {
                 "signals": produced,
-                "telemetry": self.symbol_watch.snapshot(),
-                "warmup_pending": self._count_warmup_pending(),
+                "symbol": symbol,
             },
         )
 
+    # -------------------------------------------------
+    # Helpers (UNCHANGED LOGIC)
+    # -------------------------------------------------
+
     def _symbol_ready(self, symbol: SymbolState) -> bool:
-        name = symbol.symbol
-        cached = self.cache.get(name)
+        cached = self.cache.get(symbol.symbol)
         if cached:
             return True
-        telem = self.symbol_watch.get_telemetry(name)
-        if telem and telem.data_fetch_count > 0:
-            return True
-        return False
+
+        telem = self.symbol_watch.get_telemetry(symbol.symbol)
+        return telem and telem.data_fetch_count > 0
 
     def _log_warmup(self, symbol: str) -> None:
-        now = datetime.now(timezone.utc)
-        last = self._warmup_logs.get(symbol)
-        if last and now - last < timedelta(minutes=1):
-            return
-        logger.warning("%s: waiting for warm-up data before generating signals.", symbol)
-        self._warmup_logs[symbol] = now
-
-    def _count_warmup_pending(self) -> int:
-        pending = 0
-        for symbol in self.symbol_watch.active_symbols:
-            if not self._symbol_ready(symbol):
-                pending += 1
-        return pending
+        logger.debug("%s: waiting for warm-up data", symbol)
 
     def _build_signal(self, symbol, strategy: Strategy):
         try:
             data = strategy.strategy(False)
         except Exception as e:
             logger.exception("Signal build failed for %s: %s", symbol, e)
-            self.symbol_watch.mark_error(symbol, f"signal build failed: {e}")
             return None
+
         if not isinstance(data, dict):
             return None
 
@@ -184,38 +178,38 @@ class strategyManager:
         if frame is None or getattr(frame, "empty", False):
             return None
 
-        side = None
-        lowered = raw_sig.lower()
-        if "bullish" in lowered:
-            side = "buy"
-        elif "bearish" in lowered:
-            side = "sell"
+        side = self._parse_side(raw_sig)
         if side is None:
             return None
 
-        try:
-            close = None
-            if hasattr(frame, "get"):
-                close = frame.get("close")
-            if close is None and hasattr(frame, "__getitem__"):
-                close = frame["close"]
-            if hasattr(close, "iloc"):
-                close = close.iloc[-1]
-            if hasattr(close, "item"):
-                close = close.item()
-            price = float(close)
-        except Exception as e:
-            logger.exception("Failed to parse close price for %s: %s", symbol, e)
+        price = self._extract_price(symbol, frame)
+        if price is None:
             return None
 
-        sl = max(price * 0.001, 1e-6)
-        tp = max(price * 0.002, 1e-6)
         return {
             "id": f"{symbol}:{datetime.now(timezone.utc).isoformat()}",
             "symbol": symbol,
             "side": side,
-            "sl": sl,
-            "tp": tp,
+            "sl": max(price * 0.001, 1e-6),
+            "tp": max(price * 0.002, 1e-6),
             "timestamp": datetime.now(timezone.utc),
             "data": {"price": price},
         }
+
+    def _parse_side(self, raw_sig: str) -> str | None:
+        raw_sig = raw_sig.lower()
+        if "bullish" in raw_sig:
+            return "buy"
+        if "bearish" in raw_sig:
+            return "sell"
+        return None
+
+    def _extract_price(self, symbol: str, frame) -> float | None:
+        try:
+            close = frame["close"]
+            if hasattr(close, "iloc"):
+                close = close.iloc[-1]
+            return float(close)
+        except Exception:
+            logger.exception("Failed to extract price for %s", symbol)
+            return None

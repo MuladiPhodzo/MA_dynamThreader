@@ -88,6 +88,50 @@ class ClientState:
 
 
 # =========================================================
+# HELPER FUNCTIONS
+# =========================================================
+
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return False
+
+
+def _build_symbols(symbol_map: dict[str, Any]) -> list[SymbolState]:
+    return [
+        SymbolState(
+            symbol=k,
+            strategies=[],
+            score=v.get("score", 0.0) if isinstance(v, dict) else 0.0,
+            last_backtest=StateManager._parse_dt(
+                v.get("last_backtest") if isinstance(v, dict) else None
+            ),
+            enabled=_coerce_bool(v.get("enabled")) if isinstance(v, dict) else False,
+            meta=v.get("meta", {}) if isinstance(v, dict) else {},
+        )
+        for k, v in (symbol_map or {}).items()
+    ]
+
+
+def _fresh_state() -> BotState:
+    new = BotState()
+    try:
+        from advisor.bootstrap.config_loader import UserConfig
+
+        cfg = UserConfig()
+        new.symbols = _build_symbols(cfg.symbols)
+    except Exception:
+        pass
+    StateManager.save_bot_state(new)
+    logging.warning("State file missing or empty. Creating fresh state.")
+    return new
+
+
+# =========================================================
 # STATE MANAGER
 # =========================================================
 
@@ -141,30 +185,6 @@ class StateManager:
     def load_bot_state() -> BotState:
 
         with STATE_LOCK:
-            def _coerce_bool(value: Any) -> bool:
-                if isinstance(value, bool):
-                    return value
-                if isinstance(value, (int, float)):
-                    return bool(value)
-                if isinstance(value, str):
-                    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
-                return False
-
-            def _build_symbols(symbol_map: dict[str, Any]) -> list[SymbolState]:
-                return [
-                    SymbolState(
-                        symbol=k,
-                        strategies=[],
-                        score=v.get("score", 0.0) if isinstance(v, dict) else 0.0,
-                        last_backtest=StateManager._parse_dt(
-                            v.get("last_backtest") if isinstance(v, dict) else None
-                        ),
-                        enabled=_coerce_bool(v.get("enabled")) if isinstance(v, dict) else False,
-                        meta=v.get("meta", {}) if isinstance(v, dict) else {},
-                    )
-                    for k, v in (symbol_map or {}).items()
-                ]
-
             if STATE_FILE.exists() and STATE_FILE.is_dir():
                 try:
                     STATE_FILE.rmdir()
@@ -173,17 +193,9 @@ class StateManager:
                     return BotState()
             if not STATE_FILE.exists():
                 STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-                new = BotState()
-                try:
-                    from advisor.bootstrap.config_loader import UserConfig
-
-                    cfg = UserConfig()
-                    new.symbols = _build_symbols(cfg.symbols)
-                except Exception:
-                    pass
-                StateManager.save_bot_state(new)
-                logging.warning("State file not found. Creating fresh state.")
-                return new
+                return _fresh_state()
+            if STATE_FILE.stat().st_size == 0:
+                return _fresh_state()
 
             try:
                 with open(STATE_FILE, "r") as f:
@@ -220,7 +232,7 @@ class StateManager:
 
             except Exception as e:
                 logging.critical(f"State file corrupted. Resetting. Error: {e}")
-                return BotState()
+                return _fresh_state()
 
     # -----------------------------------------------------
     # SAVE BOT STATE (Atomic)

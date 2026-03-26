@@ -367,14 +367,14 @@ class MovingAverageCrossover:
 
         copyDF = df.copy()
 
-        copyDF['Entry'] = np.nan
-        copyDF['SL'] = np.nan
-        copyDF['TP'] = np.nan
+        copyDF["Entry"] = pd.Series([None] * len(copyDF), index=copyDF.index, dtype="object")
+        copyDF["SL"] = np.nan
+        copyDF["TP"] = np.nan
 
         for i, row in copyDF.iterrows():
 
             entry_price = row['close']
-            bias = df.loc[i, "Bias"]
+            bias = copyDF.loc[i, "Bias"]
 
             if not row['Proximity']:
                 continue
@@ -385,29 +385,29 @@ class MovingAverageCrossover:
             if "Bullish" in bias:
                 if "(S)" in bias:
                     # stronger MA confluence == higher risk higher reward entry
-                    df.loc[i, 'Entry'] = "Buy"
-                    df.loc[i, 'SL'] = entry_price - (self.pip_distance * (self.pip_size * 3))
-                    df.loc[i, 'TP'] = entry_price + (3 * self.pip_distance * (self.pip_size * 3))
+                    copyDF.loc[i, 'Entry'] = "Buy"
+                    copyDF.loc[i, 'SL'] = entry_price - (self.pip_distance * (self.pip_size * 3))
+                    copyDF.loc[i, 'TP'] = entry_price + (3 * self.pip_distance * (self.pip_size * 3))
                 else:
                     # normal confluence == normal entry
-                    df.loc[i, 'Entry'] = "Buy"
-                    df.loc[i, 'SL'] = entry_price - (self.pip_distance * self.pip_size)
-                    df.loc[i, 'TP'] = entry_price + (3 * self.pip_distance * self.pip_size)
+                    copyDF.loc[i, 'Entry'] = "Buy"
+                    copyDF.loc[i, 'SL'] = entry_price - (self.pip_distance * self.pip_size)
+                    copyDF.loc[i, 'TP'] = entry_price + (3 * self.pip_distance * self.pip_size)
             # SELL
             elif "Bearish" in bias:
                 if "(S)" in bias:
                     # stronger MA confluence == higher risk higher reward entry
-                    df.loc[i, 'Entry'] = "Sell"
-                    df.loc[i, 'SL'] = entry_price + (self.pip_distance * (self.pip_size * 3))
-                    df.loc[i, 'TP'] = entry_price - (3 * self.pip_distance * (self.pip_size * 3))
+                    copyDF.loc[i, 'Entry'] = "Sell"
+                    copyDF.loc[i, 'SL'] = entry_price + (self.pip_distance * (self.pip_size * 3))
+                    copyDF.loc[i, 'TP'] = entry_price - (3 * self.pip_distance * (self.pip_size * 3))
                 else:
                     # normal confluence == normal entry
-                    df.loc[i, 'Entry'] = "Sell"
-                    df.loc[i, 'SL'] = entry_price + (self.pip_distance * self.pip_size)
-                    df.loc[i, 'TP'] = entry_price - (3 * self.pip_distance * self.pip_size)
+                    copyDF.loc[i, 'Entry'] = "Sell"
+                    copyDF.loc[i, 'SL'] = entry_price + (self.pip_distance * self.pip_size)
+                    copyDF.loc[i, 'TP'] = entry_price - (3 * self.pip_distance * self.pip_size)
             else:
                 continue
-            df = copyDF
+        df = copyDF
 
         self.backtest_entries(tf, df)
 
@@ -666,10 +666,13 @@ class MovingAverageCrossover:
         summaries = {}
         for f in as_completed(entry_futures):
             tf = entry_futures[f]
-            df = f.result()
-            self.data_handler.data[tf] = df
-            if tf in ["15M", "30M"]:
-                summaries[tf] = self.generate_backtest_summary(tf, df)[tf]
+            try:
+                df = f.result()
+                self.data_handler.data[tf] = df
+                if tf in ["15M", "30M"] and df is not None:
+                    summaries[tf] = self.generate_backtest_summary(tf, df)[tf]
+            except Exception as e:
+                logger.exception("Backtest entry generation failed for %s: %s", tf, e)
 
         return summaries
 
@@ -698,20 +701,17 @@ class MovingAverageCrossover:
             self.cache.set(key, results)
             return None
 
-        primary_tf = None
         frame = None
         preferred_tfs = ["15M", "30M", "1H", "2H", "4H", "6H", "8H", "1D"]
         for tf in preferred_tfs:
             df = self.data_handler.data.get(tf)
             if isinstance(df, pd.DataFrame) and not df.empty:
-                primary_tf = tf
                 frame = df.iloc[-1]
                 break
 
         if frame is None:
             for tf, df in self.data_handler.data.items():
                 if isinstance(df, pd.DataFrame) and not df.empty:
-                    primary_tf = tf
                     frame = df.iloc[-1]
                     break
 

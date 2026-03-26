@@ -185,7 +185,22 @@ class DataHandler:
 
     def _sanitize(self, df: pd.DataFrame):
         df = df[~df.index.duplicated(keep="last")]
-        df.sort_index(inplace=True)
+        if df.empty:
+            return df
+        try:
+            df.sort_index(inplace=True)
+            return df
+        except TypeError:
+            # Mixed index types (e.g., int + Timestamp). Attempt to coerce to datetime.
+            try:
+                coerced = pd.to_datetime(df.index, errors="coerce")
+                df = df.copy()
+                df.index = coerced
+                df = df[~df.index.isna()]
+                df.sort_index(inplace=True)
+                return df
+            except Exception:
+                logger.exception("Failed to sanitize dataframe index")
         return df
 
     def save_trade(self, trade_data, file_type="json"):

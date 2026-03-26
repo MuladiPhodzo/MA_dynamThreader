@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "last_backtest_run": null,
+  "last_backtest_run": "2026-03-24T11:09:30.556916+00:00",
   "next_backtest_run": null,
   "backtest_running": false,
   "live_trading_enabled": true,
@@ -546,16 +546,6 @@
       }
     },
     "NZDUSD": {
-      "score": 0.0,
-      "last_backtest": null,
-      "enabled": false,
-      "meta": {
-        "Total_trades": 0,
-        "Total_signals": 0,
-        "Pip_size": 0
-      }
-    },
-    "AUD": {
       "score": 0.0,
       "last_backtest": null,
       "enabled": false,

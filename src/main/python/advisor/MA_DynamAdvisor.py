@@ -1,18 +1,19 @@
 import json
+from multiprocessing.managers import SyncManager
 import sys
 from pathlib import Path
-from threading import Event
+from threading import Event, Thread
 import signal
 
 from advisor.Trade.trade_engine import ExecutionProcess
 from advisor.Trade.trateState import TradeStateManager
-from advisor.backtest.engine import backtestProcess
+from advisor.backtest.engine import BacktestProcess
 from advisor.bootstrap.sys_bootstrap import BootstrapError, SystemBootstrap
 from advisor.core.state import BotLifecycle, StateManager, SymbolState, BotState
 from advisor.core.event_bus import EventBus
 from advisor.core.flow_state import FlowStateStore
 from advisor.indicators.signal_store import SignalStore
-from advisor.indicators.strategy import strategyManager
+from advisor.indicators.strategy import StrategyManager
 from advisor.mt5_pipeline.runner import pipelineProcess
 from advisor.process.heartbeats import HeartbeatRegistry
 from advisor.process.process_engine import Supervisor
@@ -37,7 +38,9 @@ class Main:
             "execution": Event(),
         }
         self.bootstrap = SystemBootstrap()
-        self.state_manager = StateManager()
+        self.manager = SyncManager()
+        self.manager.start()
+        self.state_manager = StateManager(self.manager)
         self.scheduler = ProcessScheduler(None)
         self.heartbeats = HeartbeatRegistry()
         self.signal_store = SignalStore()
@@ -47,18 +50,20 @@ class Main:
         self.client: MetaTrader5Client | None = None
         self.trade_state: TradeStateManager | None = None
         self.cache_handler = CacheManager()
-        self.orch = Supervisor(self.shutdown_event, self.state_manager, self.heartbeats)
+        self.orch = Supervisor(self.shutdown_event, self.manager, self.state_manager, self.heartbeats)
         self.scheduler.registry = self.orch.registry
         self.scheduler.gate.registry = self.orch.registry
 
         self.bot_state = self.state_manager.bot
         self.symbol_watch = SymbolWatch(self.bot_state)
+
         if not self.symbol_watch.all_symbols:
             logger.warning("No symbols loaded in bot state; configure symbols in configs.json or bot_state.json.")
         elif not self.symbol_watch.active_symbols:
             logger.warning("No active symbols enabled; enable symbols via configs.json, bot_state.json, or /symbols/toggle.")
         self.objects = None
         self.dashboard = None
+        self._symbol_sync_thread: Thread | None = None
         self._load_configs()
         self._connect_client()
         self._ensure_symbols()
@@ -77,6 +82,10 @@ class Main:
                 raise
 
         self.config = boot.get("config")
+        try:
+            self._config_symbols_empty = not bool(self.config.symbols or {})
+        except Exception:
+            self._config_symbols_empty = True
         self.client = boot.get("client")
         self.objects = {
             "creds": self.config.creds,
@@ -137,7 +146,8 @@ class Main:
         if getattr(self.client, "account_info", None):
             return
 
-        success = self.client.initialize(self.objects["creds"])
+        # Avoid fetching all symbols during login; we'll sync on-demand.
+        success = self.client.initialize(self.objects["creds"], fetch_symbols=False)
         if not success:
             raise ConnectionError("failed to connect to MT5 server")
 
@@ -147,7 +157,6 @@ class Main:
             config_symbols = self.config.symbols or {}
         except Exception:
             config_symbols = {}
-
         self._config_symbols_empty = not bool(config_symbols)
 
         if config_symbols:
@@ -156,30 +165,58 @@ class Main:
         if self.client is None:
             return
 
-        mt5_symbols = getattr(self.client, "symbols", None) or self.client.get_Symbols()
-        if not mt5_symbols:
-            logger.warning("No symbols available from MT5 to seed bot state.")
+        # Fresh start should sync immediately so pipeline/backtest can run.
+        if self.state_manager.last_backtest_run is None:
+            logger.info("Fresh start detected; syncing MT5 symbols before ingestion.")
+            self._sync_symbols()
             return
 
-        existing = {sym.symbol: sym for sym in (self.state_manager.bot.symbols or [])}
-        updated = []
+        # Defer heavy MT5 symbol sync to a background thread on subsequent runs.
+        self._start_symbol_sync()
 
-        for sym in mt5_symbols:
-            state = existing.get(sym)
-            if state is None:
-                state = SymbolState(symbol=sym, enabled=False, last_backtest=self.state_manager.last_backtest_run)
-            updated.append(state)
+    def _sync_symbols(self) -> None:
+        try:
+            mt5_symbols = getattr(self.client, "symbols", None) or self.client.get_Symbols()
+            if not mt5_symbols:
+                logger.warning("No symbols available from MT5 to seed bot state.")
+                return
 
-        current_symbols = [sym.symbol for sym in (self.state_manager.bot.symbols or [])]
+            existing = {sym.symbol: sym for sym in (self.state_manager.bot.symbols or [])}
+            updated = []
 
-        if current_symbols != mt5_symbols:
-            self.state_manager.bot.symbols = updated
-            StateManager.save_bot_state(self.state_manager.bot)
-            self.symbol_watch.refresh()
-            logger.warning(
-                "No symbols in configs.json; synced %d symbols from MT5 with enabled=False.",
-                len(mt5_symbols),
-            )
+            for sym in mt5_symbols:
+                state = existing.get(sym)
+                if state is None:
+                    state = SymbolState(
+                        symbol=sym,
+                        enabled=False,
+                        last_backtest=self.state_manager.last_backtest_run,
+                    )
+                updated.append(state)
+
+            current_symbols = [sym.symbol for sym in (self.state_manager.bot.symbols or [])]
+
+            if current_symbols != mt5_symbols:
+                self.state_manager.bot.symbols = updated
+                StateManager.save_bot_state(self.state_manager.bot)
+                self.symbol_watch.refresh()
+                logger.warning(
+                    "No symbols in configs.json; synced %d symbols from MT5 with enabled=False.",
+                    len(mt5_symbols),
+                )
+        except Exception:
+            logger.exception("MT5 symbol sync failed")
+
+    def _start_symbol_sync(self) -> None:
+        if self._symbol_sync_thread and self._symbol_sync_thread.is_alive():
+            return
+        logger.info("Deferring MT5 symbol sync to background thread.")
+
+        def _sync():
+            self._sync_symbols()
+
+        self._symbol_sync_thread = Thread(target=_sync, name="symbol-sync", daemon=True)
+        self._symbol_sync_thread.start()
 
     def _defer_activation_until_backtest(self):
         if self.state_manager.last_backtest_run:
@@ -221,9 +258,9 @@ class Main:
             self.state_manager,
             self.symbol_watch,
             event_bus=self.event_bus,
-            state_store=self.flow_state,
+            state_store=self.flow_state
         )
-        self.backtest = backtestProcess(
+        self.backtest = BacktestProcess(
             self.client,
             self.cache_handler,
             self.orch.registry,
@@ -234,28 +271,22 @@ class Main:
             self.state_manager,
             self.scheduler,
             self.symbol_watch,
-            event_bus=self.event_bus,
-            state_store=self.flow_state,
+            event_bus=self.event_bus
         )
-        self.strategy = strategyManager(
-            self.client,
-            self.cache_handler,
-            self.process_events["strategy"],
-            self.orch.heartbeats,
-            self.orch.health_bus,
-            self.orch.registry,
-            self.scheduler,
-            self.signal_store,
-            self.state_manager,
-            self.symbol_watch,
+        self.strategy = StrategyManager(
+            scheduler=self.scheduler,
             event_bus=self.event_bus,
-            state_store=self.flow_state,
+            state_manager=self.state_manager,
+            symbol_watch=self.symbol_watch,
+            store=self.signal_store,
+            health_bus=self.orch.health_bus,
+            heartbeats=self.orch.heartbeats,
+            shutdown_event=self.process_events["strategy"]
         )
+
         self.execution = ExecutionProcess(
             client=self.client,
             signal_store=self.signal_store,
-            state=self.trade_state,
-            registry=self.orch.registry,
             health_bus=self.orch.health_bus,
             heartbeats=self.orch.heartbeats,
             shutdown_event=self.process_events["execution"],
@@ -263,7 +294,7 @@ class Main:
             state_manager=self.state_manager,
             symbol_watch=self.symbol_watch,
             event_bus=self.event_bus,
-            state_store=self.flow_state,
+            trade_state=self.trade_state,
         )
 
         self.dashboard = DashboardServer(
@@ -275,10 +306,10 @@ class Main:
             )
         )
 
-        self.orch.register_process(name="pipeline", target=self.pipeline.start, depends=[])
-        self.orch.register_process(name="backtest", target=self.backtest.start, depends=["pipeline"])
-        self.orch.register_process(name="strategy", target=self.strategy.start, depends=["pipeline", "backtest"])
-        self.orch.register_process(name="execution", target=self.execution.start, depends=["strategy"])
+        self.orch.register_process(name="pipeline", target=self.pipeline, depends=[], event_driven=True)
+        self.orch.register_process(name="backtest", target=self.backtest, depends=["pipeline"], event_driven=True)
+        self.orch.register_process(name="strategy", target=self.strategy, depends=["pipeline", "backtest"], event_driven=True)
+        self.orch.register_process(name="execution", target=self.execution, depends=["strategy"], event_driven=True)
         logger.info("Engines Ready.")
 
     def _restore_open_positions(self):

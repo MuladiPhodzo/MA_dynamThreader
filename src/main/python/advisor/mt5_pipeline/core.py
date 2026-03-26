@@ -16,6 +16,7 @@ class MarketDataPipeline:
     def __init__(self, client: MetaTrader5Client, cache_handler: CacheManager, symbol_watch: SymbolWatch):
         self.client = client
         self.cache = cache_handler
+        self.force_all_symbols: bool = True,
         self.symbol_watch = symbol_watch
 
     def fetch_symbol(self, symbol: str) -> Dict | None:
@@ -25,6 +26,9 @@ class MarketDataPipeline:
                 logger.warning(f"No data returned for {symbol}")
                 self.symbol_watch.mark_error(symbol, "no data returned")
                 return None
+            if isinstance(data, dict) and not data:
+                # No TF interval elapsed; not an error.
+                return {}
             return data
         except Exception:
             logger.exception(f"Failed fetching data for {symbol}")
@@ -43,13 +47,54 @@ class MarketDataPipeline:
             return await asyncio.wait_for(self.ingest_symbol(symbol), timeout=timeout)
         return await self.ingest_symbol(symbol)
 
+    def _process_task_result(self, symbol: str, data: Dict | None, err: Exception | None, on_symbol: Callable[[str, bool], None] | None) -> None:
+        """Process the result of a task and update symbol watch and cache."""
+        if err is not None:
+            if isinstance(err, asyncio.TimeoutError):
+                logger.warning("Timeout fetching data for %s", symbol)
+            else:
+                logger.error("Failed fetching data for %s: %s", symbol, err)
+            self.symbol_watch.mark_error(symbol, "fetch failed")
+            if on_symbol is not None:
+                on_symbol(symbol, False)
+            return
+
+        if data is None:
+            if on_symbol is not None:
+                on_symbol(symbol, False)
+            return
+
+        if isinstance(data, dict) and not data:
+            if on_symbol is not None:
+                on_symbol(symbol, True)
+            return
+
+        try:
+            self.cache.set_atomic(symbol, data)
+            self.symbol_watch.mark_data_fetch(symbol)
+            if on_symbol is not None:
+                on_symbol(symbol, True)
+        except Exception:
+            logger.exception("Failed to cache data for %s", symbol)
+            self.symbol_watch.mark_error(symbol, "cache failed")
+            if on_symbol is not None:
+                on_symbol(symbol, False)
+
     async def run_once(
         self,
         on_symbol: Callable[[str, bool], None] | None = None,
         per_symbol_timeout: float | None = None,
         max_concurrent: int | None = None,
     ) -> None:
-        symbols = self.symbol_watch.active_symbol_names() or self.symbol_watch.all_symbol_names()
+        if self.force_all_symbols:
+            symbols = self.symbol_watch.all_symbol_names()
+            if not symbols:
+                logger.warning("No symbols available to ingest.")
+                return
+            logger.info("Ingesting data for all symbols: %s", len(symbols))
+        else:
+            active_symbols = self.symbol_watch.active_symbol_names()
+            symbols = active_symbols or self.symbol_watch.all_symbol_names()
         semaphore = asyncio.Semaphore(max_concurrent) if max_concurrent else None
 
         async def _wrap(symbol: str):
@@ -67,22 +112,5 @@ class MarketDataPipeline:
 
         for task in asyncio.as_completed(tasks):
             symbol, data, err = await task
-            if err is not None:
-                if isinstance(err, asyncio.TimeoutError):
-                    logger.warning("Timeout fetching data for %s", symbol)
-                else:
-                    logger.error("Failed fetching data for %s: %s", symbol, err)
-                self.symbol_watch.mark_error(symbol, "fetch failed")
-                if on_symbol is not None:
-                    on_symbol(symbol, False)
-                continue
-
-            if data is None:
-                if on_symbol is not None:
-                    on_symbol(symbol, False)
-                continue
-
-            self.cache.set_atomic(symbol, data)
-            self.symbol_watch.mark_data_fetch(symbol)
-            if on_symbol is not None:
-                on_symbol(symbol, True)
+            self._process_task_result(symbol, data, err, on_symbol)
+        self.force_all_symbols = False

@@ -19,7 +19,11 @@ class FlowStateStore:
 
     def _load(self) -> dict[str, Any]:
         if not self.FILE.exists():
+            self.FILE.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.FILE, "w", encoding="utf-8") as handle:
+                json.dump({}, handle)
             return {}
+
         try:
             with open(self.FILE, "r", encoding="utf-8") as handle:
                 raw = json.load(handle)

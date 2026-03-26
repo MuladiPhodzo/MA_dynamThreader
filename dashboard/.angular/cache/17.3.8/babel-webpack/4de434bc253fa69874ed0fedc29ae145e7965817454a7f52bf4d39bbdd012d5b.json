@@ -1,0 +1,1 @@
+{"ast":null,"code":"import { provideHttpClient } from \"@angular/common/http\";\nexport const appConfig = {\n  providers: [provideHttpClient()]\n};","map":null,"metadata":{},"sourceType":"module","externalDependencies":[]}

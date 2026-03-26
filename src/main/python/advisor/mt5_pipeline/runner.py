@@ -1,13 +1,13 @@
 import asyncio
 from contextlib import suppress
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import advisor.mt5_pipeline.core as core
 from advisor.Client.symbols.symbol_watch import SymbolWatch
 from advisor.core.health_bus import HealthBus
 from advisor.core.event_bus import EventBus
 from advisor.core import events
-from advisor.core.state import BotLifecycle, StateManager
+from advisor.core.state import StateManager
 from advisor.scheduler.process_sceduler import ProcessScheduler
 from advisor.scheduler.resource_registry import ResourceRegistry
 from advisor.utils.dataHandler import CacheManager
@@ -35,11 +35,11 @@ class pipelineProcess:
         state_store=None,
         per_symbol_timeout: float = 120.0,
         max_concurrent: int = 6,
+        max_symbol_errors: int = 3,
     ):
         self.cache = cache_handler
         self.client = client
         self.poll_interval = interval
-        self.last_run: datetime | None = None
         self.state = state_manager
         self.symbol_watch = symbol_watch
 
@@ -47,29 +47,14 @@ class pipelineProcess:
         self.health_bus = health_bus
         self.heartbeats = heartbeats
         self.stop_event = shutdown_event
-        self.registry.register("market_data")
-        self.registry.register("symbol_ingestion")
         self.scheduler = scheduler
         self.event_bus = event_bus
         self.pipeline = core.MarketDataPipeline(self.client, self.cache, self.symbol_watch)
-        self.state_store = state_store
         self.per_symbol_timeout = per_symbol_timeout
         self.max_concurrent = max_concurrent
-
-        if self.state_store is not None:
-            section = self.state_store.get_section("pipeline", {})
-            if isinstance(section, dict):
-                ts = section.get("last_run")
-                if ts:
-                    try:
-                        self.last_run = datetime.fromisoformat(ts)
-                    except Exception:
-                        pass
+        self.max_symbol_errors = max(1, int(max_symbol_errors))
 
     async def _pipeline_cycle(self):
-        now = datetime.now(timezone.utc)
-        if self.last_run and now - self.last_run < timedelta(minutes=self.poll_interval):
-            return
 
         logger.info("Running market data ingestion")
         stop_beat = asyncio.Event()
@@ -106,6 +91,10 @@ class pipelineProcess:
                     "symbols": len(self.symbol_watch.active_symbols),
                 },
             )
+            if not ok:
+                telem = self.symbol_watch.get_telemetry(symbol)
+                if telem and telem.error_count >= self.max_symbol_errors:
+                    self._disable_symbol(symbol, f"errors={telem.error_count}")
 
         try:
             await self.pipeline.run_once(
@@ -118,53 +107,44 @@ class pipelineProcess:
             beat_task.cancel()
             with suppress(asyncio.CancelledError):
                 await beat_task
-        self.last_run = now
-        self.registry.set_ready("market_data")
-        self.registry.set_ready("symbol_ingestion")
-        if self.state_store is not None:
-            self.state_store.update_section("pipeline", {"last_run": now.isoformat()})
-        if self.event_bus is not None:
-            self.event_bus.emit(
-                events.MARKET_DATA_READY,
-                {
-                    "symbols": len(self.symbol_watch.active_symbols),
-                    "telemetry": self.symbol_watch.snapshot(),
-                },
-            )
+        payload = {
+            "symbols": len(self.symbol_watch.active_symbols),
+            "telemetry": self.symbol_watch.snapshot(),
+        }
+        await self.event_bus.publish(
+            events.MARKET_DATA_READY,
+            payload,
+        )
         self.health_bus.update(
             self.name,
             "RUNNING",
-            {
-                "symbols": len(self.symbol_watch.active_symbols),
-                "telemetry": self.symbol_watch.snapshot(),
-            },
+            payload
         )
 
-    async def _run_loop(self):
-        loop = asyncio.get_running_loop()
-        tick = asyncio.Event()
+    def register(self):
+        if self.event_bus:
+            self.event_bus.subscribe(events.SYMBOLS, self._on_market_tick)
 
-        def schedule_tick():
-            if self.stop_event.is_set():
-                return
-            tick.set()
-            loop.call_later(self.poll_interval, schedule_tick)
+    async def _on_market_tick(self, _):
+        if self.stop_event.is_set():
+            return
 
-        schedule_tick()
+        if getattr(self, "_running", False):
+            return  # prevent overlap
 
-        while not self.stop_event.is_set():
-            try:
-                await asyncio.wait_for(tick.wait(), timeout=1.0)
-            except asyncio.TimeoutError:
-                continue
-            tick.clear()
-            symbol_count = len(self.symbol_watch.active_symbol_names() or self.symbol_watch.all_symbol_names())
+        self._running = True
+
+        try:
+            symbol_count = len(
+                self.symbol_watch.active_symbol_names()
+                or self.symbol_watch.all_symbol_names()
+            )
+
             per_symbol_budget = max(5.0, float(self.per_symbol_timeout))
             concurrency = max(1, int(self.max_concurrent))
             estimated = int((symbol_count / concurrency) * per_symbol_budget) + 60
             timeout = max(180, estimated)
-            logger.info(f"estimated timeout {self.name} >> {timeout}")
-            
+
             await self.scheduler.schedule(
                 process_name=self.name,
                 required_resources=[],
@@ -173,12 +153,28 @@ class pipelineProcess:
                 heartbeats=self.heartbeats,
                 timeout=timeout,
             )
-
-    def start(self):
-        try:
-            asyncio.run(self._run_loop())
         except Exception as e:
-            self.state.set_state(BotLifecycle.DEGRADED)
-            logger.critical("%s crashed: %s", self.name, e, exc_info=True)
-            self.health_bus.update(self.name, "CRASHED", {"error": str(e)})
-            raise
+            logger.exception("Pipeline execution failed: %s", e)
+            self.health_bus.update(self.name, "ERROR", {"error": str(e)})
+
+        finally:
+            self._running = False
+
+    def _disable_symbol(self, symbol: str, reason: str) -> None:
+        try:
+            updated = False
+            for sym in self.state.bot.symbols or []:
+                if sym.symbol == symbol:
+                    if sym.enabled:
+                        sym.enabled = False
+                        updated = True
+                    if isinstance(sym.meta, dict):
+                        sym.meta["auto_disabled"] = True
+                        sym.meta["auto_disable_reason"] = reason
+                    break
+            if updated:
+                StateManager.save_bot_state(self.state.bot)
+                self.symbol_watch.refresh()
+                logger.warning("Auto-disabled %s (%s)", symbol, reason)
+        except Exception:
+            logger.exception("Failed to auto-disable symbol %s", symbol)
