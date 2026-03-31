@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "last_backtest_run": "2026-03-24T11:09:30.556916+00:00",
+  "last_backtest_run": null,
   "next_backtest_run": null,
   "backtest_running": false,
   "live_trading_enabled": true,

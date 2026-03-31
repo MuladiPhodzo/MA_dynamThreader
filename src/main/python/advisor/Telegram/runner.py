@@ -1,5 +1,6 @@
 import asyncio
 import signal
+import sys
 import threading
 from .core import TelegramMessenger
 from advisor.Client.mt5Client import MetaTrader5Client

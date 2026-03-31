@@ -1,6 +1,7 @@
 import os
 import sys
 import signal
+import asyncio
 from pathlib import Path
 import psutil
 
@@ -17,12 +18,14 @@ configure_logging()
 logger = get_logger("MAIN")
 install_exception_hooks(logger)
 
-def main():
+async def main():
     global bot
     try:
         bot = Main()
         _register_signal_handlers(bot.shutdown)
+        await bot.initialize()  # Initialize before starting background services
         bot.start()
+        await bot.wait_until_shutdown()
     except RuntimeError as e:
         logger.exception("Error occurred while running the bot: %s", e)
 
@@ -63,7 +66,7 @@ if __name__ == "__main__":
         if not ensure_single_instance(lock_file):
             raise RuntimeError("Another instance is running")
         logger.log(level=1, msg="Running bot module")
-        main()
+        asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Bot stopped manually.")
         exit_code = 0

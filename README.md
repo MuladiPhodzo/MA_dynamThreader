@@ -1,15 +1,21 @@
-# 📈 MovingAverage Advisor Bot
+# 📈 iAutoMAP Advisor Bot
 
 ```markdown
 
-The **MovingAverage Advisor** is an automated trading bot designed to analyze market trends using 
-multi-timeframe moving average crossover strategies. It connects to **MetaTrader 5 (MT5)** and 
+The **iAutoMAP Advisor** is an automated trading bot designed to analyze market trends using 
+multi-timeframe and multiple strategies. It connects to **MetaTrader 5 (MT5)** and 
 makes buy/sell decisions based on real-time price data and 
 calculated signals.
+
+**Strategies Available**
+- EMA(250:50) CrossOver and Price Proximity
+- Volume Matrix Index(Coming Soon)
+- Price Action(Coming Soon)
 
 ---
 
 ## bot constraints
+```mathemetica
 
 ┌────────────────────────────────────────┐
 | Dimension           | Bot              |
@@ -24,7 +30,10 @@ calculated signals.
 | Statefulness        | High             |
 └────────────────────────────────────────┘
 
+```
+
 ## High-Level Layer Overview
+
 ```markdown
 
     ┌────────────────────────────────────────────┐
@@ -200,41 +209,47 @@ MovingAverage_Advisor/
 ┌──────────────────────────────────────────────────────────────────────────────────────────────┐
 │                                      PROCESS THREADS                                         │
 │----------------------------------------------------------------------------------------------│
-│ Process 1: pipeline                                                                          │
+│ Process 1: pipeline(Polled every 5 minutes)                                                  │
 │ - Ingest market data via MT5                                                                 │
-│ - Cache data                                                                                │
+│ - Cache data                                                                                 │
 │ - Registry: set_ready("market_data")                                                         │
 │ - Heartbeats + HealthBus                                                                     │
-│ (src/main/python/advisor/mt5_pipeline/runner.py)                                              │
-│ (src/main/python/advisor/mt5_pipeline/core.py)                                                │
+│ (src/main/python/advisor/mt5_pipeline/runner.py)                                             │
+│ (src/main/python/advisor/mt5_pipeline/core.py)                                               │
+| - Emit event(MARKET_DATA_READY)                                                              |
+└──────────────────────────────────────────────────────────────────────────────────────────────┘
+                                             |
+                                             ▼
+┌──────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                      EVENT PROCESS                                           │
 │----------------------------------------------------------------------------------------------│
-│ Process 2: backtest                                                                          │
+│ Process 1: backtest(on: event[RUN_BACKTEST, MARKET_DATA_READY])                              │
 │ - Runs if 90 days elapsed                                                                    │
 │ - Uses cache + MT5 fetches                                                                   │
-│ - Registry: set_ready("backtest_data"), set_ready("symbols")                                 │
+│ - Registry: set_ready("market_data"), set_ready("symbols")                                   │
 │ - Heartbeats + HealthBus                                                                     │
-│ (src/main/python/advisor/backtest/engine.py)                                                  │
-│ (src/main/python/advisor/backtest/core.py)                                                    │
+│ (src/main/python/advisor/backtest/engine.py)                                                 │
+│ (src/main/python/advisor/backtest/core.py)                                                   │
+| - Emit event(BACKTEST_COMPLETED)                                                             |
 │----------------------------------------------------------------------------------------------│
-│ Process 3: strategy                                                                          │
+│ Process 2: strategy(on: event[BACKTEST_COMPLETED, MARKET_DATA_READY])                        │
 │ - Requires market_data (gate)                                                                │
 │ - Generates signals into SignalStore                                                         │
-│ - Registry: set_ready("signals")                                                             │
 │ - Heartbeats + HealthBus                                                                     │
-│ (src/main/python/advisor/indicators/strategy.py)                                              │
+│ (src/main/python/advisor/indicators/strategy.py)                                             │
 │ - Strategy implementations                                                                   │
 │   (src/main/python/advisor/indicators/MA/MovingAverage.py)                                   │
 │   (src/main/python/advisor/indicators/Volume/volumeindex.py)                                 │
+| - Emit event(SIGNAL_GENERATED)                                                               |
 │----------------------------------------------------------------------------------------------│
-│ Process 4: execution                                                                         │
-│ - Requires signals (gate)                                                                    │
+│ Process 3: execution(on: event[SIGNAL_GENERATED])                                            │
 │ - RiskManager + trade execution                                                              │
 │ - Heartbeats + HealthBus                                                                     │
-│ (src/main/python/advisor/Trade/trade_engine.py)                                               │
+│ (src/main/python/advisor/Trade/trade_engine.py)                                              │
 │ - Trade handler                                                                              │
-│   (src/main/python/advisor/Trade/tradeHandler.py)                                             │
+│   (src/main/python/advisor/Trade/tradeHandler.py)                                            │
 │ - Risk manager                                                                               │
-│   (src/main/python/advisor/Trade/RiskManager.py)                                              │
+│   (src/main/python/advisor/Trade/RiskManager.py)                                             │
 └──────────────────────────────────────────────────────────────────────────────────────────────┘
                                              |
                                              ▼
@@ -260,7 +275,7 @@ MovingAverage_Advisor/
 │ /status           -> HealthBus + Supervisor snapshot + Symbol telemetry + Bot state          │
 │ /symbols          -> list symbols                                                            │
 │ /symbols/{sym}    -> toggle symbol enabled                                                   │
-│ /processes/*      -> start/stop/restart                                                      │
+│ /processes/?      -> start/stop/restart                                                      │
 │ /config/reload    -> reload bot state + refresh SymbolWatch                                  │
 │ /backtest/run     -> reset backtest timer                                                    │
 │ (src/main/python/advisor/api/server.py)                                                      │
@@ -308,10 +323,11 @@ MovingAverage_Advisor/
 ## 📝 Todo
 
 - Integrate database logging (MySQL/PostgreSQL)
-- Implement scheduled backtesting
-- Implement Risk management module
-- Add support for alternative strategies
-- Implement stats module
+- Integrate Angular UI dashboard(in process)
+- Implement scheduled backtesting(done)
+- Implement Risk management module(done)
+- Add support for alternative strategies(done)
+- Implement stats module(done)
 - Implement tracing stoploss
 
 ---

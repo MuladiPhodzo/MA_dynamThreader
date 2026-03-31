@@ -30,15 +30,15 @@ class MetaTrader5Client:
         self.account_info = None
 
         self.TF_dict = {
-            '5M': {"tf_val": mt5.TIMEFRAME_M5, "prox_limit": 100, "interval_minutes": 5},
-            '15M': {"tf_val": mt5.TIMEFRAME_M15, "prox_limit": 100, "interval_minutes": 15},
-            '30M': {"tf_val": mt5.TIMEFRAME_M30, "prox_limit": 100, "interval_minutes": 30},
-            '1H': {"tf_val": mt5.TIMEFRAME_H1, "prox_limit": 150, "interval_minutes": 60},
-            '2H': {"tf_val": mt5.TIMEFRAME_H2, "prox_limit": 200, "interval_minutes": 120},
-            '4H': {"tf_val": mt5.TIMEFRAME_H4, "prox_limit": 250, "interval_minutes": 240},
-            '6H': {"tf_val": mt5.TIMEFRAME_H6, "prox_limit": 300, "interval_minutes": 360},
-            '8H': {"tf_val": mt5.TIMEFRAME_H8, "prox_limit": 350, "interval_minutes": 480},
-            '1D': {"tf_val": mt5.TIMEFRAME_D1, "prox_limit": 400, "interval_minutes": 1440},
+            '5M': {"tf_val": mt5.TIMEFRAME_M5, "prox_limit": 2100, "interval_minutes": 5},
+            '15M': {"tf_val": mt5.TIMEFRAME_M15, "prox_limit": 200, "interval_minutes": 15},
+            '30M': {"tf_val": mt5.TIMEFRAME_M30, "prox_limit": 200, "interval_minutes": 30},
+            '1H': {"tf_val": mt5.TIMEFRAME_H1, "prox_limit": 250, "interval_minutes": 60},
+            '2H': {"tf_val": mt5.TIMEFRAME_H2, "prox_limit": 300, "interval_minutes": 120},
+            '4H': {"tf_val": mt5.TIMEFRAME_H4, "prox_limit": 350, "interval_minutes": 240},
+            '6H': {"tf_val": mt5.TIMEFRAME_H6, "prox_limit": 400, "interval_minutes": 360},
+            '8H': {"tf_val": mt5.TIMEFRAME_H8, "prox_limit": 450, "interval_minutes": 480},
+            '1D': {"tf_val": mt5.TIMEFRAME_D1, "prox_limit": 500, "interval_minutes": 1440},
         }
 
         self.data_executor = ThreadPoolExecutor(max_workers=5)
@@ -70,17 +70,15 @@ class MetaTrader5Client:
                 self.close()
                 return False
             else:
-                logger.info(
-                    f"✅ Successfully connected to MT5 account {user_data['account_id']} on server '{user_data['server']}'")
                 self.account_info = mt5.account_info()._asdict()
                 self.terminal_info = mt5.terminal_info()._asdict()
                 self.creds = user_data
                 if fetch_symbols:
                     logger.info('fetching all available symbols...')
                     self.symbols = self.get_Symbols()
-                else:
-                    logger.info("Skipping symbol fetch on init (deferred).")
-                return True
+
+            logger.info(f"✅ Successfully connected to MT5 account {user_data['account_id']} on server '{user_data['server']}'")
+            return True
         except ConnectionError as e:
             logger.critical(f"Connection to Metatrader terminal refused with: {e}")
 
@@ -200,7 +198,7 @@ class MetaTrader5Client:
 
         return False
 
-    def get_multi_tf_data(self, symbol) -> dict[str, pd.DataFrame] | None:
+    def get_multi_tf_data(self, symbol, backtest=False) -> dict[str, pd.DataFrame] | None:
         """
         Interval-aware parallel multi-timeframe fetcher.
         Fetches ONLY timeframes whose interval has elapsed.
@@ -212,7 +210,7 @@ class MetaTrader5Client:
             return None
 
         logger.info("Checking timeframes for %s...", symbol)
-
+        self.backtest = backtest
         futures = {}
         results: dict[str, pd.DataFrame] = {}
 
@@ -273,4 +271,3 @@ class MetaTrader5Client:
         mt5.shutdown()
         logger.info("🔌 Disconnected from MetaTrader 5.")
         return False
-

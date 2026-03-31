@@ -8,6 +8,8 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram import Update
 from .utils.env_loader import load_env
 from advisor.utils.logging_setup import get_logger
+from advisor.core import events, event_bus
+
 
 import advisor.Client.mt5Client as Client
 logger = get_logger(__name__)
@@ -17,8 +19,9 @@ class TelegramMessenger:
 
     CHAT_ID_FILE = Path("telegram_chat.json")
 
-    def __init__(self, client=Client.MetaTrader5Client, chat_id=None):
+    def __init__(self, client: Client.MetaTrader5Client, event_bus: event_bus.EventBus, chat_id=None):
         self.client = client
+        self.event_bus = event_bus
         self.BOT_TOKEN = load_env()
         if not self.BOT_TOKEN:
             raise ValueError("❌ TELEGRAM_BOT_TOKEN missing in .env")
@@ -70,6 +73,9 @@ class TelegramMessenger:
     # -------------------------------------------------------------------------
     # Telegram command handlers
     # -------------------------------------------------------------------------
+    def register(self):
+        self.event_bus.subscribe(events.SIGNAL_GENERATED, self.send_message)
+
     async def _start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         self.chat_id = update.effective_chat.id
         self._save_chat_id(self.chat_id)

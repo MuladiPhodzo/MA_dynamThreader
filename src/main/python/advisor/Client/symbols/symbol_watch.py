@@ -54,6 +54,14 @@ class SymbolWatch:
         self.activate_symbols()
         self._sync_telemetry()
 
+    def get(self, symbol: str) -> SymbolState | None:
+        if isinstance(symbol, SymbolState):
+            return symbol
+        for sym in self.all_symbols:
+            if sym.symbol == symbol:
+                return sym
+        return None
+
     def is_active(self, symbol: str) -> bool:
         return symbol in self.active_symbol_names()
 

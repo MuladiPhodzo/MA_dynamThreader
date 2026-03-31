@@ -7,9 +7,8 @@ from advisor.Client.symbols.symbol_watch import SymbolWatch
 from advisor.core.health_bus import HealthBus
 from advisor.core.event_bus import EventBus
 from advisor.core import events
-from advisor.core.state import StateManager
+from advisor.core.state import BotLifecycle, StateManager
 from advisor.scheduler.process_sceduler import ProcessScheduler
-from advisor.scheduler.resource_registry import ResourceRegistry
 from advisor.utils.dataHandler import CacheManager
 from advisor.utils.logging_setup import get_logger
 
@@ -26,12 +25,11 @@ class pipelineProcess:
         shutdown_event,
         heartbeats: dict,
         health_bus: HealthBus,
-        registry: ResourceRegistry,
         scheduler: ProcessScheduler,
         state_manager: StateManager,
         symbol_watch: SymbolWatch,
+        event_bus: EventBus,
         interval=5,
-        event_bus: EventBus | None = None,
         state_store=None,
         per_symbol_timeout: float = 120.0,
         max_concurrent: int = 6,
@@ -39,11 +37,10 @@ class pipelineProcess:
     ):
         self.cache = cache_handler
         self.client = client
-        self.poll_interval = interval
+        self.poll_interval = max(1, int(interval)) * 60
         self.state = state_manager
         self.symbol_watch = symbol_watch
 
-        self.registry = registry
         self.health_bus = health_bus
         self.heartbeats = heartbeats
         self.stop_event = shutdown_event
@@ -53,6 +50,7 @@ class pipelineProcess:
         self.per_symbol_timeout = per_symbol_timeout
         self.max_concurrent = max_concurrent
         self.max_symbol_errors = max(1, int(max_symbol_errors))
+        self._running = False
 
     async def _pipeline_cycle(self):
 
@@ -88,9 +86,16 @@ class pipelineProcess:
                     "phase": "ingesting",
                     "symbol": symbol,
                     "ok": ok,
-                    "symbols": len(self.symbol_watch.active_symbols),
                 },
             )
+            try:
+                if self.event_bus:
+                    self.event_bus.emit(
+                        f"{events.MARKET_DATA_READY}:{symbol}",
+                        {"symbol": symbol, "ok": ok},
+                    )
+            except Exception:
+                logger.exception("Failed to emit market data event for %s", symbol)
             if not ok:
                 telem = self.symbol_watch.get_telemetry(symbol)
                 if telem and telem.error_count >= self.max_symbol_errors:
@@ -107,8 +112,10 @@ class pipelineProcess:
             beat_task.cancel()
             with suppress(asyncio.CancelledError):
                 await beat_task
+        symbols = self.symbol_watch.active_symbol_names() or self.symbol_watch.all_symbol_names()
         payload = {
-            "symbols": len(self.symbol_watch.active_symbols),
+            "symbols": symbols,
+            "symbol_count": len(symbols),
             "telemetry": self.symbol_watch.snapshot(),
         }
         await self.event_bus.publish(
@@ -122,14 +129,14 @@ class pipelineProcess:
         )
 
     def register(self):
-        if self.event_bus:
-            self.event_bus.subscribe(events.SYMBOLS, self._on_market_tick)
+        # Event-driven triggers are disabled; pipeline runs on a fixed poll interval.
+        return
 
-    async def _on_market_tick(self, _):
+    async def _run_poll_cycle(self):
         if self.stop_event.is_set():
             return
 
-        if getattr(self, "_running", False):
+        if self._running:
             return  # prevent overlap
 
         self._running = True
@@ -159,6 +166,23 @@ class pipelineProcess:
 
         finally:
             self._running = False
+
+    async def _on_market_tick(self, _):
+        # Backwards-compatible wrapper in case anything still emits symbol events.
+        await self._run_poll_cycle()
+
+    def run(self):
+        while not self.stop_event.is_set():
+            try:
+                logger.info("Starting pipeline process cycle")
+                asyncio.run(self._run_poll_cycle())
+            except Exception as e:
+                self.state.set_state(BotLifecycle.DEGRADED)
+                logger.exception("Pipeline process failed: %s", e)
+                self.health_bus.update(self.name, "ERROR", {"error": str(e)})
+            if not self.stop_event.is_set():
+                logger.info("Pipeline process sleeping for %d seconds", self.poll_interval)
+                self.stop_event.wait(self.poll_interval)
 
     def _disable_symbol(self, symbol: str, reason: str) -> None:
         try:

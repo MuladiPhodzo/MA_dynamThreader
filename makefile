@@ -48,23 +48,29 @@ typecheck:
 # ------------------------------
 # Build and Packaging
 # ------------------------------
+compile: clean test
+	pyi-makespec --onefile src\main\python\advisor\__main__.py 
+
 build: clean test
-	pyinstaller --onefile --noconsole --clean --nocompress MA_DynamAdvisor.spec
+	pyinstaller --onefile --noconsole --clean --nocompress __main__.spec
 
 env:
 	powershell -ExecutionPolicy Bypass -File venv\Scripts\Activate.ps1 
 
 run:
-	python src/main/python/advisor/MA_DynamAdvisor.py
+	python src/main/python/advisor/__main__.py
 
-install:
+update:
+	pip install --upgrade pip
+
+install: update
 	pip install -r requirements.txt
 
 update-deps:
 	pip install --upgrade -r requirements.txt
 
 package: build
-	cd dist && zip -r MA_DynamAdvisor.zip MA_DynamAdvisor.exe README.md
+	cd dist && zip -r iAutoMap_Advisor.zip iAutoMap_Advisor.exe README.md
 
 release: lint test build package
 	@echo "🚀 Release build completed!"

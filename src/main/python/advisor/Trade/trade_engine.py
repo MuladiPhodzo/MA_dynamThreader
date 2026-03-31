@@ -60,17 +60,37 @@ class ExecutionProcess:
 
         self._running: set[str] = set()  # per-symbol lock
         self._processed: set[str] = set()  # dedup signals
+        self.processed_signals = self._processed
+        self._subscribed_symbols: set[str] = set()
 
     # -------------------------------------------------
     # Registration (NO LOOP)
     # -------------------------------------------------
 
     def register(self):
+        self.event_bus.subscribe(events.SYMBOLS, self._on_symbols)
         for symbol in self.symbol_watch.all_symbol_names():
-            self.event_bus.subscribe(
-                f"{events.SIGNAL_GENERATED}:{symbol}",
-                lambda evt, s=symbol: asyncio.create_task(self._on_signal(s, evt)),
-            )
+            self._subscribe_symbol(symbol)
+
+    def _subscribe_symbol(self, symbol: str) -> None:
+        if symbol in self._subscribed_symbols:
+            return
+        self._subscribed_symbols.add(symbol)
+        self.event_bus.subscribe(
+            f"{events.SIGNAL_GENERATED}:{symbol}",
+            lambda evt, s=symbol: asyncio.create_task(self._on_signal(s, evt)),
+        )
+
+    def _on_symbols(self, event) -> None:
+        symbols = []
+        if event and getattr(event, "payload", None):
+            payload_symbols = event.payload.get("symbols")
+            if isinstance(payload_symbols, list):
+                symbols = payload_symbols
+        if not symbols:
+            symbols = self.symbol_watch.all_symbol_names()
+        for symbol in symbols:
+            self._subscribe_symbol(symbol)
 
     # -------------------------------------------------
     # Event Handler
@@ -111,6 +131,10 @@ class ExecutionProcess:
             signal_id = payload.get("id")
 
             if not signal_id or signal_id in self._processed:
+                return
+
+            state = self.symbol_watch.get(symbol)
+            if state is not None and not getattr(state, "enabled", False):
                 return
 
             # reconstruct signal (or pass full object if preferred)

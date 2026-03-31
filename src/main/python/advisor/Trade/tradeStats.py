@@ -1,13 +1,13 @@
 import os
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
-from advisor.utils.dataHandler import CacheManager as Cache
+from datetime import datetime, timedelta, timezone
+from advisor.utils.cache_handler import CacheManager as Cache
 from advisor.utils.logging_setup import get_logger
 logger = get_logger(__name__)
 class TradeStats:
     def __init__(self, data_path="stats/trading_stats.csv", reports_path="stats/reports"):
-        self.data_handler.data_path = data_path
+        self.data_path = data_path
         self.reports_path = reports_path
         os.makedirs(os.path.dirname(data_path), exist_ok=True)
         os.makedirs(reports_path, exist_ok=True)
@@ -30,8 +30,11 @@ class TradeStats:
     # Data Persistence
     # -------------------------------------------------------------------------
     def _load_data(self):
-        if os.path.exists(self.data_handler.data_path):
-            return pd.read_csv(self.data_handler.data_path, parse_dates=["timestamp"])
+        if os.path.exists(self.data_path):
+            df = pd.read_csv(self.data_path, parse_dates=["timestamp"])
+            if "timestamp" in df.columns:
+                df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
+            return df
         else:
             return pd.DataFrame(columns=[
                 "timestamp", "symbol", "profit", "balance_before",
@@ -39,14 +42,14 @@ class TradeStats:
             ])
 
     def _save(self):
-        self.df.to_csv(self.data_handler.data_path, index=False)
+        self.df.to_csv(self.data_path, index=False)
 
     # -------------------------------------------------------------------------
     # Data Logging
     # -------------------------------------------------------------------------
     def log_trade(self, symbol, profit, balance_before, balance_after, lot_size, duration):
         new_trade = pd.DataFrame([{
-            "timestamp": datetime.now(),
+            "timestamp": datetime.now(timezone.utc),
             "symbol": symbol,
             "profit": profit,
             "balance_before": balance_before,
@@ -168,7 +171,7 @@ class TradeStats:
             logger.info("⚠️ No data for report generation.")
             return None
 
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         if period == "daily":
             cutoff = now - timedelta(days=1)
             report_name = f"daily_report_{now.strftime('%Y_%m_%d')}.csv"

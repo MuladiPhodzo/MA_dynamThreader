@@ -113,6 +113,24 @@
   padding: 8px 4px;
 }
 
+.action-banner {
+  border: 1px solid var(--panel-border);
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 13px;
+  background: rgba(9, 16, 26, 0.6);
+}
+
+.action-banner.status {
+  border-color: rgba(41, 197, 107, 0.4);
+  color: var(--ok);
+}
+
+.action-banner.error {
+  border-color: rgba(255, 77, 109, 0.4);
+  color: var(--bad);
+}
+
 .content-label {
   font-size: 11px;
   text-transform: uppercase;

@@ -197,15 +197,31 @@ def _read_trade_log_history(path: Path, limit: int) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     try:
-        with open(path, "r", encoding="utf-8") as handle:
-            data = json.load(handle)
-        if not isinstance(data, list):
+        rows: list[dict[str, Any]] = []
+        if path.suffix == ".jsonl":
+            with open(path, "r", encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(entry, dict):
+                        rows.append(entry)
+        else:
+            with open(path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            if isinstance(data, list):
+                rows = [row for row in data if isinstance(row, dict)]
+
+        if not rows:
             return []
-        rows = data[-limit:]
+
+        rows = rows[-limit:]
         points: list[dict[str, Any]] = []
         for row in rows:
-            if not isinstance(row, dict):
-                continue
             equity = _safe_float(row.get("balance_after") or row.get("balance_before"))
             points.append(
                 {
@@ -264,7 +280,12 @@ def account_history(app: FastAPI, limit: int = 200):
         [Path("stats/trading_stats.csv"), root / "stats" / "trading_stats.csv"]
     )
     trade_log_path = _first_existing(
-        [Path("trades/trades_log.json"), root / "trades" / "trades_log.json"]
+        [
+            Path("trades/trades_log.jsonl"),
+            Path("trades/trades_log.json"),
+            root / "trades" / "trades_log.jsonl",
+            root / "trades" / "trades_log.json",
+        ]
     )
     state_path = _first_existing([Path("bot_state.json"), root / "bot_state.json"])
 
@@ -417,7 +438,10 @@ def create_app(ctx: DashboardContext) -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:4200"],
+        allow_origins=[
+            "http://localhost:4200",
+            "http://127.0.0.1:4200",
+        ],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

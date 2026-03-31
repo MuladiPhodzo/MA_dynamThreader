@@ -1,4 +1,4 @@
-from core.state import SymbolState
+from advisor.core.state import SymbolState
 
 
 WEIGHTS = {

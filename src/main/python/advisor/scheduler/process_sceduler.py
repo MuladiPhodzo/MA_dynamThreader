@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass, field
-from importlib.metadata.diagnose import inspect
+import inspect
 from threading import Lock
 from typing import Any, Awaitable, Callable, Optional, Union
 
@@ -241,6 +241,9 @@ class ProcessScheduler:
         """
         Waits for resources with shutdown awareness.
         """
+        if self.gate.registry is None:
+            logger.warning("[%s] Resource registry unavailable; skipping readiness gating.", process_name)
+            return
 
         def blocking_wait():
             start = datetime.now(timezone.utc)
@@ -276,10 +279,13 @@ class ProcessScheduler:
             return await asyncio.wait_for(task(), timeout=timeout)
 
         # Run sync task safely in thread
-        return await asyncio.wait_for(
+        result = await asyncio.wait_for(
             asyncio.to_thread(task),
             timeout=timeout,
         )
+        if asyncio.iscoroutine(result):
+            return await asyncio.wait_for(result, timeout=timeout)
+        return result
 
     @staticmethod
     def _normalize_requirements(

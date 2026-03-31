@@ -2,16 +2,17 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from advisor.Client.mt5Client import MetaTrader5Client
 from advisor.core.health_bus import HealthBus
 from advisor.core.event_bus import EventBus
 from advisor.core import events
 from advisor.core.state import BotLifecycle, StateManager
-from advisor.scheduler.process_sceduler import ProcessScheduler
 from advisor.scheduler.requirements import ProcessRequirement
 from advisor.utils.dataHandler import CacheManager
 from advisor.Client.symbols.symbol_watch import SymbolWatch
 from advisor.backtest.core import Backtest
 from advisor.utils.logging_setup import get_logger
+from advisor.scheduler.process_sceduler import ProcessScheduler
 
 logger = get_logger("Backtest")
 
@@ -26,13 +27,13 @@ class BacktestProcess:
 
     def __init__(
         self,
-        client,
+        client: MetaTrader5Client,
         cache_handler: CacheManager,
+        scheduler: ProcessScheduler,
         health_bus: HealthBus,
         heartbeats: dict,
         shutdown_event,
         state_manager: StateManager,
-        scheduler: ProcessScheduler,
         symbol_watch: SymbolWatch,
         event_bus: EventBus,
         per_symbol_timeout: float = 120.0,
@@ -43,10 +44,10 @@ class BacktestProcess:
         self.symbol_watch = symbol_watch
         self.backtest = Backtest(self.client, self.cache, self.symbol_watch)
 
+        self.scheduler = scheduler
         self.health_bus = health_bus
         self.heartbeats = heartbeats
         self.stop_event = shutdown_event
-        self.scheduler = scheduler
         self.state_manager = state_manager
         self.event_bus = event_bus
 
@@ -64,7 +65,7 @@ class BacktestProcess:
         Trigger backtest on system ready or explicit request.
         """
         self.event_bus.subscribe(
-            events.SYSTEM_READY,
+            events.MARKET_DATA_READY,
             lambda evt: asyncio.create_task(self._trigger_backtest())
         )
 
@@ -112,7 +113,6 @@ class BacktestProcess:
 
     async def _backtest_cycle(self):
         now = datetime.now(timezone.utc)
-
         self.state_manager.set_state(BotLifecycle.RUNNING_BACKTEST)
 
         self.backtest.initialise()
@@ -136,6 +136,15 @@ class BacktestProcess:
 
             if not ok:
                 errors += 1
+            try:
+                asyncio.create_task(
+                    self.event_bus.publish(
+                        f"{events.BACKTEST_COMPLETED}:{symbol}",
+                        {"symbol": symbol, "ok": ok},
+                    )
+                )
+            except Exception:
+                logger.exception("Failed to emit backtest completion for %s", symbol)
 
         await self.backtest.run_once(
             on_symbol=_on_symbol,
@@ -156,7 +165,8 @@ class BacktestProcess:
         await self.event_bus.publish(
             events.BACKTEST_COMPLETED,
             {
-                "symbols": len(self.symbol_watch.all_symbols),
+                "symbols": self.symbol_watch.all_symbol_names(),
+                "symbol_count": len(self.symbol_watch.all_symbols),
                 "telemetry": self.symbol_watch.snapshot(),
             },
         )
@@ -168,7 +178,6 @@ class BacktestProcess:
                 "symbols": len(self.symbol_watch.all_symbols),
             },
         )
-
     # -------------------------------------------------
     # Helpers (UNCHANGED)
     # -------------------------------------------------
@@ -178,11 +187,22 @@ class BacktestProcess:
         activated = []
 
         for sym in self.state_manager.bot.symbols:
-            if sym.score is not None and sym.score >= 0.75:
-                if not sym.enabled:
-                    sym.enabled = True
-                    activated.append(sym.symbol)
-                    updated = True
+            desired = None
+            if isinstance(sym.meta, dict) and "desired_enabled" in sym.meta:
+                desired = bool(sym.meta.get("desired_enabled"))
+                sym.meta.pop("desired_enabled", None)
+
+            should_enable = desired if desired is not None else (
+                sym.score is not None and sym.score >= 0.75
+            )
+
+            if should_enable and not sym.enabled:
+                sym.enabled = True
+                activated.append(sym.symbol)
+                updated = True
+            if not should_enable and sym.enabled and desired is False:
+                sym.enabled = False
+                updated = True
 
         if updated:
             StateManager.save_bot_state(self.state_manager.bot)

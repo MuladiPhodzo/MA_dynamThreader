@@ -9,7 +9,6 @@ import threading
 from advisor.core import dependency_graph, health_bus
 from advisor.core.state import BotLifecycle, StateManager
 from advisor.process.heartbeats import HeartbeatRegistry
-from advisor.scheduler.resource_registry import ResourceRegistry
 from advisor.utils.logging_setup import get_logger
 
 logger = get_logger("Orchestrator")
@@ -103,7 +102,6 @@ class Supervisor:
         )
         if event_driven:
             # For event-driven processes, we assume they manage their own lifecycle and heartbeats
-            logger.info("Registering event-driven process: %s", name)
             target.register()
         # Mark as event-driven internally
         setattr(proc, "_event_driven", event_driven)
@@ -133,10 +131,11 @@ class Supervisor:
                 pass
 
         proc.process = threading.Thread(
-            target=proc.target, name=proc.name, args=proc.args, daemon=True
+            target=self._process_wrapper, name=proc.name, args=(proc,), daemon=True
         )
         proc.process.start()
         self.heartbeats[proc.name] = datetime.now(timezone.utc).isoformat()
+        self._schedule_heartbeat_check(proc)
 
     def _process_wrapper(self, proc: ManagedProcess):
         try:
@@ -157,6 +156,12 @@ class Supervisor:
 
         # Signal stop
         proc.stop_event.set()
+        instance = getattr(proc.target, "__self__", None)
+        if instance and hasattr(instance, "stop_event"):
+            try:
+                instance.stop_event.set()
+            except Exception:
+                pass
         if proc.process and proc.process.is_alive():
             proc.process.join(timeout=5)
         self._spawn(proc)
@@ -164,6 +169,11 @@ class Supervisor:
     def _schedule_heartbeat_check(self, proc: ManagedProcess):
         if self.shutdown.is_set():
             return
+        if proc.heartbeat_timer:
+            try:
+                proc.heartbeat_timer.cancel()
+            except Exception:
+                pass
 
         def check():
             if self.shutdown.is_set():
@@ -184,6 +194,71 @@ class Supervisor:
         proc.heartbeat_timer = Timer(self.HEARTBEAT_TIMEOUT.total_seconds(), check)
         proc.heartbeat_timer.daemon = True
         proc.heartbeat_timer.start()
+
+    def _is_process_running(self, name: str) -> bool:
+        proc = self.processes.get(name)
+        if proc is None:
+            return False
+        if getattr(proc, "_event_driven", False):
+            return True
+        return bool(proc.process and proc.process.is_alive())
+
+    def get_process_snapshot(self) -> dict[str, dict]:
+        snapshot = {}
+        for name, proc in self.processes.items():
+            running = self._is_process_running(name)
+            pid = None
+            if proc.process and proc.process.is_alive():
+                pid = proc.process.ident
+            snapshot[name] = {
+                "running": running,
+                "pid": pid,
+                "restart_count": proc.restart_count,
+                "last_heartbeat": self.heartbeats.get(name),
+                "dependencies": list(proc.dependencies or []),
+            }
+        return snapshot
+
+    def start_process(self, name: str) -> bool:
+        proc = self.processes.get(name)
+        if proc is None:
+            return False
+        if getattr(proc, "_event_driven", False):
+            return True
+        for dep in proc.dependencies or []:
+            if not self._is_process_running(dep):
+                return False
+        if proc.process and proc.process.is_alive():
+            return True
+        self._spawn(proc)
+        return True
+
+    def stop_process(self, name: str) -> bool:
+        proc = self.processes.get(name)
+        if proc is None:
+            return False
+        instance = getattr(proc.target, "__self__", None)
+        if instance and hasattr(instance, "stop_event"):
+            try:
+                instance.stop_event.set()
+            except Exception:
+                pass
+        proc.stop_event.set()
+        if proc.process and proc.process.is_alive():
+            proc.process.join(timeout=10)
+        if proc.heartbeat_timer:
+            proc.heartbeat_timer.cancel()
+        return True
+
+    def restart_process(self, name: str) -> bool:
+        proc = self.processes.get(name)
+        if proc is None:
+            return False
+        if not self.stop_process(name):
+            return False
+        if getattr(proc, "_event_driven", False):
+            return True
+        return self.start_process(name)
 
     # -------------------------------
     # START / STOP

@@ -127,7 +127,7 @@ class Backtest:
         strategy_name = f"{sym.symbol}_EMA"
         if any(getattr(s, "strategy_name", None) == strategy_name for s in sym.strategies):
             return
-        strategy = MovingAverageCrossover(sym, self.client, self.cache)
+        strategy = MovingAverageCrossover(sym, self.client, self.cache, start_workers=False)
         new_strategy_o = Strategy(strategy_name=strategy_name, strategy=strategy, strategy_score=0.0)
         sym.strategies.append(new_strategy_o)
 

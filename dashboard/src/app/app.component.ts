@@ -40,6 +40,8 @@ export class AppComponent implements OnInit, OnDestroy {
   error: string | null = null;
   activePanel: PanelKey = "account";
   issues: IssueEntry[] = [];
+  filteredSymbolsList: string[] = [];
+  filteredIssuesList: IssueEntry[] = [];
   symbolQuery = "";
   symbolFilter: SymbolFilter = "all";
   logQuery = "";
@@ -48,6 +50,7 @@ export class AppComponent implements OnInit, OnDestroy {
   accountHistory: AccountHistoryResponse | null = null;
   accountSummary: AccountHistorySummary | null = null;
   equitySeries: AccountHistoryPoint[] = [];
+  recentSnapshots: AccountHistoryPoint[] = [];
   equityPolyline = "";
   equityAreaPath = "";
   equityLatest = 0;
@@ -66,6 +69,8 @@ export class AppComponent implements OnInit, OnDestroy {
   supportSubmitting = false;
   kbArticles: SupportArticle[] = [];
   kbLoading = false;
+  actionStatus: string | null = null;
+  actionError: string | null = null;
 
   private statusSub: Subscription | null = null;
   private historySub: Subscription | null = null;
@@ -82,6 +87,7 @@ export class AppComponent implements OnInit, OnDestroy {
           this.loading = false;
           this.error = null;
           this.updateIssues();
+          this.refreshFilteredSymbols();
         },
         error: (err) => {
           this.loading = false;
@@ -100,6 +106,7 @@ export class AppComponent implements OnInit, OnDestroy {
           this.accountHistory = null;
           this.accountSummary = null;
           this.equitySeries = [];
+          this.recentSnapshots = [];
           this.equityPolyline = "";
           this.equityAreaPath = "";
         },
@@ -121,10 +128,14 @@ export class AppComponent implements OnInit, OnDestroy {
     return Object.keys(this.status.telemetry);
   }
 
-  filteredSymbols(): string[] {
+  refreshFilteredSymbols() {
+    if (!this.status) {
+      this.filteredSymbolsList = [];
+      return;
+    }
     const base = this.symbolNames();
     const query = this.symbolQuery.trim().toLowerCase();
-    return base.filter((symbol) => {
+    this.filteredSymbolsList = base.filter((symbol) => {
       const entry = this.status?.telemetry[symbol];
       if (this.symbolFilter === "active" && !entry?.enabled) return false;
       if (this.symbolFilter === "inactive" && entry?.enabled) return false;
@@ -182,9 +193,9 @@ export class AppComponent implements OnInit, OnDestroy {
     }
   }
 
-  filteredIssues(): IssueEntry[] {
+  refreshFilteredIssues() {
     const query = this.logQuery.trim().toLowerCase();
-    return this.issues.filter((issue) => {
+    this.filteredIssuesList = this.issues.filter((issue) => {
       if (this.logSeverity !== "all" && issue.severity !== this.logSeverity) return false;
       if (!query) return true;
       return (
@@ -196,6 +207,7 @@ export class AppComponent implements OnInit, OnDestroy {
 
   private updateIssues() {
     this.issues = this.buildIssues();
+    this.refreshFilteredIssues();
   }
 
   private buildIssues(): IssueEntry[] {
@@ -252,6 +264,7 @@ export class AppComponent implements OnInit, OnDestroy {
     this.accountHistory = data;
     this.accountSummary = data.summary ?? null;
     this.equitySeries = data.points || [];
+    this.recentSnapshots = this.equitySeries.slice(-5);
     this.buildEquityChart();
   }
 
@@ -305,6 +318,17 @@ export class AppComponent implements OnInit, OnDestroy {
     } L ${firstPt.x},${height - pad} Z`;
   }
 
+  private async runAction(action: () => Promise<unknown>, successMessage: string) {
+    this.actionError = null;
+    this.actionStatus = null;
+    try {
+      await action();
+      this.actionStatus = successMessage;
+    } catch (err: any) {
+      this.actionError = err?.message || "Action failed.";
+    }
+  }
+
   async submitSupportTicket() {
     if (!this.supportForm.subject || !this.supportForm.message) {
       this.supportError = "Subject and message are required.";
@@ -344,28 +368,41 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   async start(name: string) {
-    await firstValueFrom(this.api.startProcess(name));
+    await this.runAction(
+      () => firstValueFrom(this.api.startProcess(name)),
+      `Started ${name}.`
+    );
   }
 
   async stop(name: string) {
-    await firstValueFrom(this.api.stopProcess(name));
+    await this.runAction(
+      () => firstValueFrom(this.api.stopProcess(name)),
+      `Stopped ${name}.`
+    );
   }
 
   async restart(name: string) {
-    await firstValueFrom(this.api.restartProcess(name));
+    await this.runAction(
+      () => firstValueFrom(this.api.restartProcess(name)),
+      `Restarted ${name}.`
+    );
   }
 
   async toggle(symbol: string) {
     if (!this.status) return;
     const entry = this.status.telemetry[symbol];
-    await firstValueFrom(this.api.toggleSymbol(symbol, !entry.enabled));
+    if (!entry) return;
+    await this.runAction(
+      () => firstValueFrom(this.api.toggleSymbol(symbol, !entry.enabled)),
+      `${symbol} ${entry.enabled ? "disabled" : "enabled"}.`
+    );
   }
 
   async runBacktest() {
-    await firstValueFrom(this.api.runBacktest());
+    await this.runAction(() => firstValueFrom(this.api.runBacktest()), "Backtest started.");
   }
 
   async reloadConfig() {
-    await firstValueFrom(this.api.reloadConfig());
+    await this.runAction(() => firstValueFrom(this.api.reloadConfig()), "Config reloaded.");
   }
 }

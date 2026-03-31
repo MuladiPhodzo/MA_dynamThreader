@@ -10,13 +10,21 @@ from advisor.utils.cache_handler import CacheManager
 from advisor.utils.logging_setup import get_logger
 import pandas as pd
 import datetime
+from datetime import timezone
 from typing import Any, Dict, Optional
 
 logger = get_logger("Data_store")
 
 class DataHandler:
 
-    def __init__(self, symbol: str, strategy: str, cache: CacheManager, max_bars: int = 3000):
+    def __init__(
+        self,
+        symbol: str,
+        strategy: str,
+        cache: CacheManager,
+        max_bars: int = 3000,
+        start_workers: bool = True,
+    ):
 
         self.symbol = symbol
         self.strategy = strategy
@@ -35,20 +43,41 @@ class DataHandler:
         self.dir_name = str(self.base_dir)
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
-        # start background workers
+        self._stop_event = threading.Event()
+        self._workers_started = False
+        self.fetch_thread = None
+        self.save_thread = None
+
+        if start_workers:
+            self.start_workers()
+        self._prime_cache()
+
+    def start_workers(self):
+        if self._workers_started:
+            return
+        if self._stop_event.is_set():
+            self._stop_event.clear()
+
         self.fetch_thread = threading.Thread(
             target=self._fetch_loop,
             daemon=True
         )
-
         self.save_thread = threading.Thread(
             target=self._auto_save,
             daemon=True
         )
-
         self.fetch_thread.start()
         self.save_thread.start()
-        self._prime_cache()
+        self._workers_started = True
+
+    def stop_workers(self, timeout: float | None = None):
+        if not self._workers_started:
+            return
+        self._stop_event.set()
+        for t in (self.fetch_thread, self.save_thread):
+            if t is not None:
+                t.join(timeout=timeout)
+        self._workers_started = False
 
     def _prime_cache(self):
         try:
@@ -75,6 +104,8 @@ class DataHandler:
 
             new_rows = df.loc[~df.index.isin(existing.index)]
 
+            self.all_timestamps.update(df.index)
+
             if new_rows.empty:
                 return
 
@@ -95,6 +126,7 @@ class DataHandler:
         """
         with self.process_lock:
             with self.thread_lock:
+                logger.info(f"Setting atomic cache for {symbol} with size {len(json.dumps(data))}...")
                 try:
                     data_path = self._data_path(symbol)
                     meta_path = self._meta_path(symbol)
@@ -102,10 +134,11 @@ class DataHandler:
                     tmp_data = data_path.with_suffix(".tmp")
                     tmp_meta = meta_path.with_suffix(".tmp")
 
+                    safe_data = self._json_safe(data)
                     payload = {
                         "symbol": symbol,
                         "timestamp": time.time(),
-                        "data": data
+                        "data": safe_data
                     }
 
                     meta = {
@@ -140,6 +173,7 @@ class DataHandler:
         return self.data
 
     def update_timestamps(self, df: pd.DataFrame):
+        logger.info("Updating timestamps from dataframe with size %d...", len(df))
         if isinstance(df, pd.DataFrame) and "Slow_MA" in df.columns:
             self.all_timestamps.update(df.index)
 
@@ -177,6 +211,25 @@ class DataHandler:
             header=not os.path.exists(path)
         )
 
+    def _json_safe(self, data: Any) -> Any:
+        if isinstance(data, pd.DataFrame):
+            return {
+                "__type__": "DataFrame",
+                "value": data.to_json(orient="split", date_format="iso")
+            }
+        if isinstance(data, pd.Series):
+            return {
+                "__type__": "Series",
+                "value": data.to_json(date_format="iso")
+            }
+        if isinstance(data, dict):
+            return {key: self._json_safe(value) for key, value in data.items()}
+        if isinstance(data, (list, tuple)):
+            return [self._json_safe(value) for value in data]
+        if isinstance(data, (datetime.datetime, pd.Timestamp)):
+            return data.isoformat()
+        return data
+
     # ---------------- internal ---------------- #
     def _trim(self, df: pd.DataFrame):
         if len(df) > self.max_bars:
@@ -205,36 +258,22 @@ class DataHandler:
 
     def save_trade(self, trade_data, file_type="json"):
         """
-        Saves trade information to a file (JSON or CSV).
+        Saves trade information to a file (JSONL or CSV).
 
         Args:
             trade_data (dict): Trade details to save.
-            file_type (str): 'json' or 'csv'.
+            file_type (str): 'json' (JSONL) or 'csv'.
         """
         def _toJSON(file_path, trade_data, timestamp):
             """Helper method for JSON saving"""
             entry = {"timestamp": timestamp, **trade_data}
-
-            if os.path.exists(file_path):
-                try:
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                except json.JSONDecodeError:
-                    data = []
-            else:
-                data = []
-
-            data.append(entry)
-
-            with open(file_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=4)
-
-            logger.info(f"✅ Trade saved to {file_path}")
+            with open(file_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, default=str) + "\n")
+            logger.info(f"Trade saved to {file_path}")
 
         def _toCSV(file_path, trade_data):
-            import datetime
             """Helper method for CSV saving"""
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            timestamp = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
             entry = {"timestamp": timestamp, **trade_data}
             file_exists = os.path.exists(file_path)
 
@@ -243,14 +282,14 @@ class DataHandler:
                 if not file_exists:
                     writer.writeheader()
                 writer.writerow(entry)
-            logger.info(f"✅ Trade saved to {file_path}")
+            logger.info(f"Trade saved to {file_path}")
 
         # Ensure trades directory exists
         os.makedirs("trades", exist_ok=True)
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        timestamp = datetime.datetime.now(timezone.utc).isoformat()
         with self.file_lock:
             if file_type.lower() == "json":
-                file_path = "trades/trades_log.json"
+                file_path = "trades/trades_log.jsonl"
                 _toJSON(file_path, trade_data, timestamp)
 
             elif file_type.lower() == "csv":
@@ -274,7 +313,7 @@ class DataHandler:
             return
 
         df = pd.DataFrame(data)
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        timestamp = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
         path = Path(file_path)
         # Auto-create folder if it doesn't exist
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -324,8 +363,8 @@ class DataHandler:
                     logger.exception(f"Failed deleting cache for {symbol}")
 
     def _fetch_loop(self):
-        while True:
-
+        while not self._stop_event.is_set():
+            logger.info(f"Fetching data for {self.symbol} from cache...")
             try:
 
                 data = self.cache.get(self.symbol)
@@ -338,14 +377,21 @@ class DataHandler:
 
             ttl = getattr(self.cache, "ttl", 180)
             sleep_s = max(15, min(int(ttl / 2), 120))
-            time.sleep(sleep_s)
+            if self._stop_event.wait(sleep_s):
+                break
 
     def _auto_save(self):
-        while True:
-            time.sleep(900)
+        while not self._stop_event.is_set():
+            logger.info(f"Auto-saving data for {self.symbol} to disk...")
+            if self._stop_event.wait(900):
+                break
             try:
-                for tf, df in self.data.items():
+                with self.lock:
+                    items = list(self.data.items())
 
+                for tf, df in items:
+                    if df is None or df.empty:
+                        continue
                     path = self.base_dir / f"{tf}.csv"
 
                     df.tail(1).to_csv(

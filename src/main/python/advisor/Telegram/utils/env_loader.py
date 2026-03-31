@@ -1,7 +1,8 @@
 # advisor/Telegram/utils/env_loader.py
 from dotenv import load_dotenv
 from pathlib import Path
-import os, sys
+import os
+import sys
 from advisor.utils.logging_setup import get_logger
 
 logger = get_logger(__name__)

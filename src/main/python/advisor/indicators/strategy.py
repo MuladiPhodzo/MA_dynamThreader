@@ -47,6 +47,7 @@ class StrategyManager:
         self.state = state_manager
 
         self._running: set[str] = set()  # prevent duplicate runs per symbol
+        self._subscribed_symbols: set[str] = set()
 
     # -------------------------------------------------
     # Registration (NO LOOP)
@@ -56,11 +57,34 @@ class StrategyManager:
         """
         Subscribe per-symbol to market data events.
         """
+        self.event_bus.subscribe(events.MARKET_DATA_READY, self._on_symbols)
         for symbol in self.symbol_watch.all_symbol_names():
-            self.event_bus.subscribe(
-                f"{events.MARKET_DATA_READY}:{symbol}",
-                lambda evt, s=symbol: asyncio.create_task(self._on_market_data(s, evt)),
-            )
+            self._subscribe_symbol(symbol)
+
+    def _subscribe_symbol(self, symbol: str) -> None:
+        if symbol in self._subscribed_symbols:
+            return
+        self._subscribed_symbols.add(symbol)
+        self.event_bus.subscribe(
+            f"{events.MARKET_DATA_READY}:{symbol}",
+            lambda evt, s=symbol: asyncio.create_task(self._on_market_data(s, evt)),
+        )
+
+        self.event_bus.subscribe(
+            f"{events.BACKTEST_COMPLETED}:{symbol}",
+            lambda evt, s=symbol: asyncio.create_task(self._on_market_data(s, evt)),
+        )
+
+    def _on_symbols(self, event) -> None:
+        symbols: list[str] = []
+        if event and getattr(event, "payload", None):
+            payload_symbols = event.payload.get("symbols")
+            if isinstance(payload_symbols, list):
+                symbols = payload_symbols
+        if not symbols:
+            symbols = self.symbol_watch.all_symbol_names()
+        for symbol in symbols:
+            self._subscribe_symbol(symbol)
 
     # -------------------------------------------------
     # Event Handler
@@ -76,7 +100,7 @@ class StrategyManager:
         self._running.add(symbol)
 
         try:
-            self.state.bot.state.value = BotLifecycle.RUNNING_BACKTEST
+            self.state.set_state(BotLifecycle.RUNNING_BACKTEST)
             await self.scheduler.schedule(
                 process_name=f"{self.name}:{symbol}",
                 required_resources=[],  # event-driven → no gating
@@ -86,7 +110,7 @@ class StrategyManager:
                 timeout=120,
             )
         except Exception as e:
-            self.state.bot.state.value = BotLifecycle.DEGRADED
+            self.state.set_state(BotLifecycle.DEGRADED)
             self.health_bus.update(f"{self.name}:{symbol}", "ERROR", {"error": str(e)})
             logger.exception("Failed to schedule strategy for %s: %s", symbol, e)
             self.symbol_watch.mark_error(symbol, f"scheduling failed: {e}")
@@ -101,6 +125,9 @@ class StrategyManager:
         state = self.symbol_watch.get(symbol)
 
         if state is None:
+            return
+
+        if not getattr(state, "enabled", False):
             return
 
         if not self._symbol_ready(state):
@@ -119,9 +146,8 @@ class StrategyManager:
                     continue
 
                 self.signal_store.add_signal(payload)
-                self.symbol_watch.mark_signal(state)
+                self.symbol_watch.mark_signal(symbol)
                 produced += 1
-
                 # 🔥 Emit per-symbol signal
                 await self.event_bus.publish(
                     f"{events.SIGNAL_GENERATED}:{symbol}",
@@ -172,6 +198,7 @@ class StrategyManager:
 
         raw_sig = str(data.get("sig") or "")
         if not raw_sig or "(W)" in raw_sig:
+            logger.info(f"skipping weak {symbol} signal")
             return None
 
         frame = data.get("frame")

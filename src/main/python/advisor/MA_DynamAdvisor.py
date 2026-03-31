@@ -1,3 +1,4 @@
+import asyncio
 import json
 from multiprocessing.managers import SyncManager
 import sys
@@ -18,17 +19,20 @@ from advisor.mt5_pipeline.runner import pipelineProcess
 from advisor.process.heartbeats import HeartbeatRegistry
 from advisor.process.process_engine import Supervisor
 from advisor.scheduler.process_sceduler import ProcessScheduler
-from advisor.utils.dataHandler import CacheManager
+from advisor.utils.cache_handler import CacheManager
 from advisor.Client.mt5Client import MetaTrader5Client
 from advisor.Client.symbols.symbol_watch import SymbolWatch
 from advisor.api.server import DashboardContext, DashboardServer
 from advisor.GUI.userInput import setUpWizard
 from advisor.utils.logging_setup import get_logger
+from advisor.core import events
 
 logger = get_logger("Runner")
 
 
 class Main:
+    name = "main"
+
     def __init__(self):
         self.shutdown_event = Event()
         self.process_events = {
@@ -49,10 +53,8 @@ class Main:
         self.event_bus = EventBus()
         self.client: MetaTrader5Client | None = None
         self.trade_state: TradeStateManager | None = None
-        self.cache_handler = CacheManager()
+        self.cache_handler = CacheManager(persist=True)
         self.orch = Supervisor(self.shutdown_event, self.manager, self.state_manager, self.heartbeats)
-        self.scheduler.registry = self.orch.registry
-        self.scheduler.gate.registry = self.orch.registry
 
         self.bot_state = self.state_manager.bot
         self.symbol_watch = SymbolWatch(self.bot_state)
@@ -64,11 +66,13 @@ class Main:
         self.objects = None
         self.dashboard = None
         self._symbol_sync_thread: Thread | None = None
+
+    async def initialize(self):
         self._load_configs()
-        self._connect_client()
-        self._ensure_symbols()
-        self._defer_activation_until_backtest()
+        await self._connect_client()
         self._init_core_instances()
+        await self._ensure_symbols()
+        self._defer_activation_until_backtest()
 
     def _load_configs(self):
         try:
@@ -139,19 +143,24 @@ class Main:
         config_path.write_text(json.dumps(payload, indent=4), encoding="utf-8")
         logger.info("Created new configs.json via setup wizard.")
 
-    def _connect_client(self):
+    async def _connect_client(self):
         if self.client is None:
+            logger.info(f"initializing MT5 client with server={self.objects['creds']['server']} account_id={self.objects['creds']['account_id']}")
             self.client = MetaTrader5Client()
-
-        if getattr(self.client, "account_info", None):
-            return
 
         # Avoid fetching all symbols during login; we'll sync on-demand.
         success = self.client.initialize(self.objects["creds"], fetch_symbols=False)
+        if getattr(self.client, "account_info", None):
+            return
+        self.orch.health_bus.update(self.name, "RUNNING", {"phase": "initializing"})
+        await self.event_bus.publish(events.CONNECTED, {})
+
         if not success:
             raise ConnectionError("failed to connect to MT5 server")
+        else:
+            logger.info("MT5 client initialized successfully.")
 
-    def _ensure_symbols(self):
+    async def _ensure_symbols(self):
         config_symbols = {}
         try:
             config_symbols = self.config.symbols or {}
@@ -160,6 +169,9 @@ class Main:
         self._config_symbols_empty = not bool(config_symbols)
 
         if config_symbols:
+            symbols = self.symbol_watch.all_symbol_names()
+            if symbols:
+                self.event_bus.emit(events.SYMBOLS, {"symbols": symbols})
             return
 
         if self.client is None:
@@ -168,13 +180,13 @@ class Main:
         # Fresh start should sync immediately so pipeline/backtest can run.
         if self.state_manager.last_backtest_run is None:
             logger.info("Fresh start detected; syncing MT5 symbols before ingestion.")
-            self._sync_symbols()
+            await self._sync_symbols()
             return
 
         # Defer heavy MT5 symbol sync to a background thread on subsequent runs.
         self._start_symbol_sync()
 
-    def _sync_symbols(self) -> None:
+    async def _sync_symbols(self) -> None:
         try:
             mt5_symbols = getattr(self.client, "symbols", None) or self.client.get_Symbols()
             if not mt5_symbols:
@@ -196,6 +208,7 @@ class Main:
 
             current_symbols = [sym.symbol for sym in (self.state_manager.bot.symbols or [])]
 
+            updated_state = False
             if current_symbols != mt5_symbols:
                 self.state_manager.bot.symbols = updated
                 StateManager.save_bot_state(self.state_manager.bot)
@@ -204,6 +217,9 @@ class Main:
                     "No symbols in configs.json; synced %d symbols from MT5 with enabled=False.",
                     len(mt5_symbols),
                 )
+                updated_state = True
+            if updated_state or mt5_symbols:
+                self.event_bus.emit(events.SYMBOLS, {"symbols": mt5_symbols})
         except Exception:
             logger.exception("MT5 symbol sync failed")
 
@@ -213,7 +229,7 @@ class Main:
         logger.info("Deferring MT5 symbol sync to background thread.")
 
         def _sync():
-            self._sync_symbols()
+            asyncio.run(self._sync_symbols())
 
         self._symbol_sync_thread = Thread(target=_sync, name="symbol-sync", daemon=True)
         self._symbol_sync_thread.start()
@@ -229,8 +245,8 @@ class Main:
                 changed = True
             if not sym.meta:
                 if getattr(self, "_config_symbols_empty", False):
-                    sym.meta["total_signals"] = 0
-                    sym.meta["total_trades"] = 0
+                    sym.meta["Total_signals"] = 0
+                    sym.meta["Total_trades"] = 0
                 sym.meta.setdefault("Pip_size", 0)
                 changed = True
             if sym.enabled:
@@ -248,40 +264,38 @@ class Main:
 
         self.trade_state = TradeStateManager(self.client)
         self.pipeline = pipelineProcess(
-            self.client,
-            self.cache_handler,
-            self.process_events["pipeline"],
-            self.orch.heartbeats,
-            self.orch.health_bus,
-            self.orch.registry,
-            self.scheduler,
-            self.state_manager,
-            self.symbol_watch,
+            client=self.client,
+            cache_handler=self.cache_handler,
+            shutdown_event=self.process_events["pipeline"],
+            heartbeats=self.orch.heartbeats,
+            health_bus=self.orch.health_bus,
+            scheduler=self.scheduler,
+            state_manager=self.state_manager,
+            symbol_watch=self.symbol_watch,
             event_bus=self.event_bus,
-            state_store=self.flow_state
         )
+
         self.backtest = BacktestProcess(
-            self.client,
-            self.cache_handler,
-            self.orch.registry,
-            self.orch.health_bus,
-            self.orch.heartbeats,
-            self.process_events["backtest"],
-            self.bot_state,
-            self.state_manager,
-            self.scheduler,
-            self.symbol_watch,
-            event_bus=self.event_bus
+            client=self.client,
+            cache_handler=self.cache_handler,
+            scheduler=self.scheduler,
+            health_bus=self.orch.health_bus,
+            heartbeats=self.orch.heartbeats,
+            shutdown_event=self.process_events["backtest"],
+            state_manager=self.state_manager,
+            symbol_watch=self.symbol_watch,
+            event_bus=self.event_bus,
         )
         self.strategy = StrategyManager(
             scheduler=self.scheduler,
             event_bus=self.event_bus,
-            state_manager=self.state_manager,
+            shutdown_event=self.process_events["strategy"],
+            heartbeats=self.orch.heartbeats,
+            health_bus=self.orch.health_bus,
+            cache_handler=self.cache_handler,
             symbol_watch=self.symbol_watch,
             store=self.signal_store,
-            health_bus=self.orch.health_bus,
-            heartbeats=self.orch.heartbeats,
-            shutdown_event=self.process_events["strategy"]
+            state_manager=self.state_manager,
         )
 
         self.execution = ExecutionProcess(
@@ -306,7 +320,7 @@ class Main:
             )
         )
 
-        self.orch.register_process(name="pipeline", target=self.pipeline, depends=[], event_driven=True)
+        self.orch.register_process(name="pipeline", target=self.pipeline.run, depends=[])
         self.orch.register_process(name="backtest", target=self.backtest, depends=["pipeline"], event_driven=True)
         self.orch.register_process(name="strategy", target=self.strategy, depends=["pipeline", "backtest"], event_driven=True)
         self.orch.register_process(name="execution", target=self.execution, depends=["strategy"], event_driven=True)
@@ -332,6 +346,9 @@ class Main:
             self.state_manager.set_state(BotLifecycle.DEGRADED)
             self.shutdown()
             raise RuntimeError(f"critical system fault: {e}")
+
+    async def wait_until_shutdown(self) -> None:
+        await asyncio.to_thread(self.shutdown_event.wait)
 
     def _get_signal_name(self, signum: int) -> str:
         try:

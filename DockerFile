@@ -20,4 +20,4 @@ COPY . .
 RUN pyb clean install
 
 # Default command to run the bot
-CMD ["python", "src/main/python/advisor/RunAdvisorBot.py"]
+CMD ["python", "src/main/python/advisor/__main__.py"]

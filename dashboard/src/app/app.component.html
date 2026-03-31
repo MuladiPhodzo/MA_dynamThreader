@@ -27,7 +27,6 @@
   </header>
 
   <aside class="sidebar">
-    <div class="nav-title">Navigation</div>
     <nav class="nav">
       <button class="nav-item" [class.active]="activePanel === 'account'" (click)="setActivePanel('account')">
         Account
@@ -59,7 +58,6 @@
   <main class="content">
     <section class="content-header">
       <div>
-        <div class="content-label">Active Panel</div>
         <div class="content-title">{{ panelMeta.title }}</div>
         <div class="content-subtitle">{{ panelMeta.subtitle }}</div>
       </div>
@@ -78,9 +76,10 @@
         </div>
       </div>
     </section>
+    <div class="action-banner status" *ngIf="actionStatus">{{ actionStatus }}</div>
+    <div class="action-banner error" *ngIf="actionError">{{ actionError }}</div>
 
     <div class="mobile-nav">
-      <label for="panel-select">Navigate</label>
       <select id="panel-select" [(ngModel)]="activePanel">
         <option value="account">Account</option>
         <option value="symbols">Symbols</option>
@@ -146,7 +145,7 @@
           {{ equitySeries.length ? "" : "Historical snapshots will appear here once the feed is enabled." }}
         </div>
         <div class="snapshot-list" *ngIf="equitySeries.length">
-          <div class="snapshot-item" *ngFor="let point of equitySeries.slice(-5)">
+          <div class="snapshot-item" *ngFor="let point of recentSnapshots">
             <div class="snapshot-time">{{ point.timestamp }}</div>
             <div class="snapshot-value">{{ point.equity | number: "1.2-2" }}</div>
           </div>
@@ -165,12 +164,13 @@
           <input
             type="text"
             [(ngModel)]="symbolQuery"
+            (ngModelChange)="refreshFilteredSymbols()"
             placeholder="EURUSD, GBPUSD, NAS100"
           />
         </div>
         <div class="field">
           <label>Status</label>
-          <select [(ngModel)]="symbolFilter">
+          <select [(ngModel)]="symbolFilter" (ngModelChange)="refreshFilteredSymbols()">
             <option value="all">All</option>
             <option value="active">Active only</option>
             <option value="inactive">Inactive only</option>
@@ -178,10 +178,10 @@
         </div>
         <div class="field summary">
           <label>Showing</label>
-          <div>{{ filteredSymbols().length }} of {{ symbolNames().length }}</div>
+          <div>{{ filteredSymbolsList.length }} of {{ symbolNames().length }}</div>
         </div>
       </div>
-      <div class="telemetry" *ngIf="status; else loadingBlock">
+      <div class="telemetry" *ngIf="status; else symbolPlaceholder">
         <div class="telemetry-row header">
           <div>Symbol</div>
           <div>Enabled</div>
@@ -191,7 +191,7 @@
           <div>Errors</div>
           <div>Last Error</div>
         </div>
-        <div class="telemetry-row" *ngFor="let sym of filteredSymbols()">
+        <div class="telemetry-row" *ngFor="let sym of filteredSymbolsList">
           <div class="mono">{{ sym }}</div>
           <div>
             <button class="toggle" [class.on]="status?.telemetry[sym]?.enabled" (click)="toggle(sym)">
@@ -205,7 +205,10 @@
           <div class="mono">{{ status?.telemetry[sym]?.last_error || "--" }}</div>
         </div>
       </div>
-      <div class="empty" *ngIf="!status">No telemetry yet.</div>
+      <ng-template #symbolPlaceholder>
+        <div class="empty" *ngIf="loading">Loading status...</div>
+        <div class="empty" *ngIf="!loading">No telemetry yet.</div>
+      </ng-template>
     </section>
 
     <section class="panel" *ngIf="activePanel === 'bot'">
@@ -250,11 +253,16 @@
       <div class="log-filters">
         <div class="field">
           <label>Search logs</label>
-          <input type="text" [(ngModel)]="logQuery" placeholder="Process, symbol, error" />
+          <input
+            type="text"
+            [(ngModel)]="logQuery"
+            (ngModelChange)="refreshFilteredIssues()"
+            placeholder="Process, symbol, error"
+          />
         </div>
         <div class="field">
           <label>Severity</label>
-          <select [(ngModel)]="logSeverity">
+          <select [(ngModel)]="logSeverity" (ngModelChange)="refreshFilteredIssues()">
             <option value="all">All</option>
             <option value="critical">Critical</option>
             <option value="warn">Warn</option>
@@ -263,11 +271,11 @@
         </div>
         <div class="field summary">
           <label>Matching</label>
-          <div>{{ filteredIssues().length }} of {{ issues.length }}</div>
+          <div>{{ filteredIssuesList.length }} of {{ issues.length }}</div>
         </div>
       </div>
-      <div class="log-list" *ngIf="filteredIssues().length; else noIssues">
-        <div class="log-item" *ngFor="let issue of filteredIssues()">
+      <div class="log-list" *ngIf="filteredIssuesList.length; else noIssues">
+        <div class="log-item" *ngFor="let issue of filteredIssuesList">
           <div
             class="log-severity"
             [class.critical]="issue.severity === 'critical'"

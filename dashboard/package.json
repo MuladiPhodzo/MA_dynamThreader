@@ -1,12 +1,12 @@
 {
-  "name": "movingaverage-dashboard",
+  "name": "iAutoMAP-dashboard",
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "start": "set ROLLUP_SKIP_NODEJS_NATIVE=1&& ng serve --proxy-config proxy.conf.json",
-    "build": "ng build",
-    "test": "ng test",
-    "lint": "ng lint"
+    "start": "set ESBUILD_BINARY_PATH=node_modules\\@esbuild\\win32-x64\\esbuild.exe&& set ROLLUP_SKIP_NODEJS_NATIVE=1&& ng serve --proxy-config proxy.conf.json",
+    "build": "set ESBUILD_BINARY_PATH=node_modules\\@esbuild\\win32-x64\\esbuild.exe&& ng build",
+    "test": "set ESBUILD_BINARY_PATH=node_modules\\@esbuild\\win32-x64\\esbuild.exe&& ng test",
+    "lint": "set ESBUILD_BINARY_PATH=node_modules\\@esbuild\\win32-x64\\esbuild.exe&& ng lint"
   },
   "dependencies": {
     "@angular/animations": "17.3.8",

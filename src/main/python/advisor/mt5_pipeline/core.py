@@ -16,7 +16,7 @@ class MarketDataPipeline:
     def __init__(self, client: MetaTrader5Client, cache_handler: CacheManager, symbol_watch: SymbolWatch):
         self.client = client
         self.cache = cache_handler
-        self.force_all_symbols: bool = True,
+        self.force_all_symbols: bool = True
         self.symbol_watch = symbol_watch
 
     def fetch_symbol(self, symbol: str) -> Dict | None:
