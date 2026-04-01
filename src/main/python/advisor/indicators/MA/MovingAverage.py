@@ -208,7 +208,7 @@ class MovingAverageCrossover:
     # ------------------------------------------------------
     # 1) Moving Average Values (per timeframe)
     # ------------------------------------------------------
-    def opcalculate_moving_averages_data(self, tf, df):
+    def calculate_moving_averages_data(self, tf, df):
         """
         Calculate Fast/Slow MA and derived columns per timeframe.
         - Validates 'close' column
@@ -239,6 +239,8 @@ class MovingAverageCrossover:
 
             except Exception:
                 logger.warning(f"{self.symbol_name} {tf}: Failed to normalize datetime index")
+        else:
+            logger.info(f"{self.symbol_name} {tf}: Datetime index verified.")
 
         # Compute MAs — shift by 1 to avoid lookahead
         df = df.copy()
@@ -255,7 +257,7 @@ class MovingAverageCrossover:
             logger.exception(f"exception in proximity calculation for {self.symbol_name} {tf}: {e}")
 
         if self.verify_fields(tf, df):
-            self.data_handler.update_timestamps(df)
+            self.data_handler.update_timestamps(df.index)
             return df
         return
 
@@ -358,7 +360,7 @@ class MovingAverageCrossover:
             - Insert Main_Trend into 15M & 30M rows that match that timestamp
         """
         try:
-            if not self.data_handler.all_timestamps or len(self.data_handler.all_timestamps) == 0:
+            if not self.data_handler.all_timestamps or not len(self.data_handler.all_timestamps) == 0:
                 logger.warning(f"{self.symbol_name}: No timestamps found for MTF alignment.")
                 return
 
@@ -737,6 +739,7 @@ class MovingAverageCrossover:
 
         for f in as_completed(futures):
             tf = futures[f]
+            print(f"MA calculation completed for {tf}\n\nfuture result: {f.result()}\n\n")
             self.data_handler.data[tf] = f.result()
 
         if self.backtest:

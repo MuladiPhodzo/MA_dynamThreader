@@ -172,10 +172,30 @@ class DataHandler:
     def get_all(self) -> Dict[str, pd.DataFrame]:
         return self.data
 
-    def update_timestamps(self, df: pd.DataFrame):
-        logger.info("Updating timestamps from dataframe with size %d...", len(df))
-        if isinstance(df, pd.DataFrame) and "Slow_MA" in df.columns:
-            self.all_timestamps.update(df.index)
+    def update_timestamps(self, timestamps):
+        """
+        Accepts:
+            - pd.Index
+            - list / iterable of timestamps
+            - pd.DataFrame (fallback support)
+        """
+        if timestamps is None:
+            return
+
+        try:
+            # If full DataFrame passed
+            if isinstance(timestamps, pd.DataFrame):
+                if timestamps.empty:
+                    return
+                timestamps = timestamps.index
+
+            # Now treat as iterable
+            self.all_timestamps.update(timestamps)
+
+            logger.info(f"Timestamps updated: total={len(self.all_timestamps)}")
+
+        except Exception as e:
+            logger.exception(f"Failed updating timestamps: {e}")
 
     def get_all_timestamps(self) -> set:
         return sorted(self.all_timestamps) if self.all_timestamps else None
