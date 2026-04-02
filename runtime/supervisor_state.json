@@ -1,6 +1,6 @@
 {
   "restart_counts": {
-    "pipeline": 5,
+    "pipeline": 1,
     "backtest": 1,
     "strategy": 1,
     "execution": 3

@@ -1,4 +1,5 @@
 import asyncio
+import time
 from typing import Callable, Dict
 from advisor.Client.mt5Client import MetaTrader5Client
 from advisor.Client.symbols.symbol_watch import SymbolWatch
@@ -19,15 +20,16 @@ class MarketDataPipeline:
         self.force_all_symbols: bool = True
         self.symbol_watch = symbol_watch
 
-    def fetch_symbol(self, symbol: str) -> Dict | None:
+    def fetch_symbol(self, symbol: str, first_run: bool) -> Dict | None:
         try:
-            data = self.client.get_multi_tf_data(symbol)
+            data = self.client.get_multi_tf_data(symbol, backtest=first_run)
             if data is None:
                 logger.warning(f"No data returned for {symbol}")
                 self.symbol_watch.mark_error(symbol, "no data returned")
                 return None
             if isinstance(data, dict) and not data:
                 # No TF interval elapsed; not an error.
+                logger.info(f"No new data for {symbol}")
                 return {}
             return data
         except Exception:
@@ -35,17 +37,17 @@ class MarketDataPipeline:
             self.symbol_watch.mark_error(symbol, "fetch failed")
             return None
 
-    async def ingest_symbol(self, symbol: str) -> dict | None:
+    async def ingest_symbol(self, symbol: str, first_run: bool) -> dict | None:
         # Offload blocking MT5 call
-        data = await asyncio.to_thread(self.fetch_symbol, symbol)
+        data = await asyncio.to_thread(self.fetch_symbol, symbol, first_run)
         if data is None:
             return None
         return data
 
-    async def _ingest_with_timeout(self, symbol: str, timeout: float | None) -> dict | None:
+    async def _ingest_with_timeout(self, symbol: str, first_run: bool, timeout: float | None) -> dict | None:
         if timeout:
-            return await asyncio.wait_for(self.ingest_symbol(symbol), timeout=timeout)
-        return await self.ingest_symbol(symbol)
+            return await asyncio.wait_for(self.ingest_symbol(symbol, first_run), timeout=timeout)
+        return await self.ingest_symbol(symbol, first_run)
 
     def _process_task_result(self, symbol: str, data: Dict | None, err: Exception | None, on_symbol: Callable[[str, bool], None] | None) -> None:
         """Process the result of a task and update symbol watch and cache."""
@@ -71,6 +73,7 @@ class MarketDataPipeline:
 
         try:
             self.cache.set_atomic(symbol, data)
+            time.sleep(0.2)  # slight delay to ensure cache consistency for downstream processes
             self.symbol_watch.mark_data_fetch(symbol)
             if on_symbol is not None:
                 on_symbol(symbol, True)
@@ -82,6 +85,7 @@ class MarketDataPipeline:
 
     async def run_once(
         self,
+        first_run: bool,
         on_symbol: Callable[[str, bool], None] | None = None,
         per_symbol_timeout: float | None = None,
         max_concurrent: int | None = None,
@@ -101,9 +105,9 @@ class MarketDataPipeline:
             try:
                 if semaphore:
                     async with semaphore:
-                        data = await self._ingest_with_timeout(symbol, per_symbol_timeout)
+                        data = await self._ingest_with_timeout(symbol, first_run, per_symbol_timeout)
                 else:
-                    data = await self._ingest_with_timeout(symbol, per_symbol_timeout)
+                    data = await self._ingest_with_timeout(symbol, first_run, per_symbol_timeout)
                 return symbol, data, None
             except Exception as exc:
                 return symbol, None, exc

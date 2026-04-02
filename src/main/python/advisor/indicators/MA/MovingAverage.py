@@ -85,6 +85,24 @@ class MovingAverageCrossover:
         except Exception:
             logger.exception("Failed updating pip size for %s", self.symbol_name)
 
+    # =========================================================
+    # SCHEMA ENFORCEMENT (CRITICAL)
+    # =========================================================
+    def _ensure_schema(self, df: pd.DataFrame) -> pd.DataFrame:
+        required = [
+            "Entry", "SL", "TP",
+            "ExitPrice", "ExitIndex",
+            "Outcome", "PnL_Pips"
+        ]
+
+        for col in required:
+            if col not in df.columns:
+                if col in ["Entry", "Outcome"]:
+                    df[col] = None
+                else:
+                    df[col] = np.nan
+        return df
+
     def get_pip_size(self, df: pd.DataFrame):
         """Auto-detect pip size from number of decimals in price."""
         price = float(df["close"].dropna().iloc[-1])
@@ -201,6 +219,23 @@ class MovingAverageCrossover:
         # If never hit SL/TP — optional behavior
         return "NoHit", entry_price, None
 
+    def _apply_precision(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Normalize all price-related columns to match pip precision.
+        Ensures numerical consistency across OHLC + indicators.
+        """
+        try:
+            precision = abs(int(np.log10(self.pip_size)))
+        except Exception:
+            precision = 5  # safe fallback
+
+        cols = ["open", "high", "low", "close", "Fast_MA", "Slow_MA"]
+
+        for col in cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce").round(precision)
+
+        return df
     # ------------------------------------------------------
     # Main Methods
     # ------------------------------------------------------
@@ -217,10 +252,7 @@ class MovingAverageCrossover:
         """
         # Skip non-dataframes & placeholder keys
         if df is None or not isinstance(df, pd.DataFrame):
-            return
-
-        if 'close' not in df.columns:
-            logger.warning(f"{self.symbol_name} {tf} missing 'close' column — skipping TF.")
+            logger.warning(f"{self.symbol_name} {tf} is None or not a DataFrame, instance == {type(df)}")
             return
 
         df = df.copy()
@@ -246,20 +278,23 @@ class MovingAverageCrossover:
         df = df.copy()
         self._refresh_pip_size(df)
         meta = self.client.TF_dict[tf]
-        threshold = meta["prox_limit"] * self.pip_size
+        threshold = meta.get("prox_limit", 300) * self.pip_size
         try:
             # Vectorized calculation and safe fill
+            logger.info(f"Calculating MAs for {self.symbol_name} {tf} with threshold {threshold}")
             df.loc[:, 'Fast_MA'] = df['close'].rolling(window=self.fast_period, min_periods=1).mean().shift(1)
             df.loc[:, 'Slow_MA'] = df['close'].rolling(window=self.slow_period, min_periods=1).mean().shift(1)
             df.loc[:, 'Bias'] = np.where(df['Fast_MA'] > df['Slow_MA'], "Bullish", "Bearish")
             df.loc[:, 'Proximity'] = (df['close'] - df['Slow_MA']).abs() <= threshold
         except Exception as e:
             logger.exception(f"exception in proximity calculation for {self.symbol_name} {tf}: {e}")
-
+        df = self._apply_precision(df)
         if self.verify_fields(tf, df):
             self.data_handler.update_timestamps(df.index)
-            return df
-        return
+        else:
+            logger.warning(f"{self.symbol_name} {tf} failed field verification.")
+        df.dropna(subset=['close'], inplace=True)  # Ensure 'close' is valid for downstream logic
+        return df
 
     # ------------------------------------------------------
     # 2) Check fields (per timeframe)
@@ -284,7 +319,6 @@ class MovingAverageCrossover:
                 return False
 
             logger.info(f"🎯 Proximity check completed for all timeframes ({self.symbol_name})")
-            # NOTE: do not auto-run sequence_data here if caller wants control
             return True
         except Exception as e:
             logger.exception(f"exception in proximity check: {e}")
@@ -582,7 +616,7 @@ class MovingAverageCrossover:
         all_pips = []
 
         # Ensure numeric PnL
-        df["PnL_Pips"] = df["PnL_Pips"].astype(float)
+        df["PnL_Pips"] = df["PnL_Pips"].astype(float) if "PnL_Pips" in df.columns and not df["PnL_Pips"].isna().all() else pd.Series(dtype=float)
 
         # --- BASIC METRICS ---
         wins = df[df["PnL_Pips"] > 0]
@@ -603,7 +637,7 @@ class MovingAverageCrossover:
         ) if total_trades else 0
 
         # --- WIN/LOSS STREAKS ---
-        outcomes = df["Outcome"].tolist()
+        outcomes = df["Outcome"].tolist() if "Outcome" in df.columns and not df["Outcome"].isna().any() else []
         max_win_streak = max_loss_streak = 0
         temp_win = temp_loss = 0
 
@@ -739,12 +773,12 @@ class MovingAverageCrossover:
 
         for f in as_completed(futures):
             tf = futures[f]
-            print(f"MA calculation completed for {tf}\n\nfuture result: {f.result()}\n\n")
             self.data_handler.data[tf] = f.result()
 
         if self.backtest:
             # --- STEP 2: sequence synthesis ---
             self.sequence_Trend_Data()
+            print(f"MA entries {tf}\nresult: \n{self.data_handler.data}\n\n")
             self.results = self.backtest_entries_data()
             key = self.symbol_name + "_backtest_summary"
             self.cache.set(key, self.results)

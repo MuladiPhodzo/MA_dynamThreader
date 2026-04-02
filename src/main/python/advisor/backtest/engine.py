@@ -13,6 +13,7 @@ from advisor.Client.symbols.symbol_watch import SymbolWatch
 from advisor.backtest.core import Backtest
 from advisor.utils.logging_setup import get_logger
 from advisor.scheduler.process_sceduler import ProcessScheduler
+from advisor.scheduler.resource_registry import ResourceRegistry
 
 logger = get_logger("Backtest")
 
@@ -36,6 +37,7 @@ class BacktestProcess:
         state_manager: StateManager,
         symbol_watch: SymbolWatch,
         event_bus: EventBus,
+        registry: ResourceRegistry,
         per_symbol_timeout: float = 120.0,
         max_concurrent: int = 4,
     ):
@@ -45,6 +47,8 @@ class BacktestProcess:
         self.backtest = Backtest(self.client, self.cache, self.symbol_watch)
 
         self.scheduler = scheduler
+        self.registry = registry
+        self.registry.register("backtest")
         self.health_bus = health_bus
         self.heartbeats = heartbeats
         self.stop_event = shutdown_event
@@ -54,56 +58,104 @@ class BacktestProcess:
         self.per_symbol_timeout = per_symbol_timeout
         self.max_concurrent = max_concurrent
 
-        self._running = False  # single-flight guard
+        self._running: set[str] = set()  # prevent duplicate runs per symbol
+        self._subscribed_symbols: set[str] = set()
 
     # -------------------------------------------------
     # Registration (NO LOOP)
     # -------------------------------------------------
-
     def register(self):
-        """
-        Trigger backtest on system ready or explicit request.
-        """
-        self.event_bus.subscribe(
-            events.MARKET_DATA_READY,
-            lambda evt: asyncio.create_task(self._trigger_backtest())
-        )
+        self.event_bus.subscribe(events.MARKET_DATA_READY, self._on_symbols)
+
+        for s in self.symbol_watch.all_symbol_names():
+            self._subscribe(s)
+
+    def _subscribe(self, symbol: str):
+        if symbol in self._subscribed_symbols:
+            return
+
+        self._subscribed_symbols.add(symbol)
 
         self.event_bus.subscribe(
-            events.RUN_BACKTEST,
-            lambda evt: asyncio.create_task(self._trigger_backtest(force=True))
+            f"{events.MARKET_DATA_READY}:{symbol}",
+            lambda evt, s=symbol: asyncio.create_task(self._trigger(s)),
         )
+
+    def _on_symbols(self, event):
+        symbols = event.payload.get("symbols") if event and event.payload else None
+        if not symbols:
+            symbols = self.symbol_watch.all_symbol_names()
+
+        for s in symbols:
+            self._subscribe(s)
 
     # -------------------------------------------------
     # Trigger
     # -------------------------------------------------
 
-    async def _trigger_backtest(self, force: bool = False):
+    async def _trigger(self, symbol: str):
         if self.stop_event.is_set():
             return
 
-        if self._running:
+        if symbol in self._running:
             return
 
-        if not force and not self._should_run():
+        if not self._should_run():
             return
 
-        self._running = True
+        self._running.add(symbol)
 
         try:
             await self.scheduler.schedule(
-                process_name=self.name,
-                required_resources=[],  # event-driven → no gating
-                task=self._backtest_cycle,
+                process_name=f"{self.name}:{symbol}",
+                required_resources=[],
+                task=lambda: self._run(symbol),
                 shutdown_event=self.stop_event,
                 heartbeats=self.heartbeats,
-                timeout=900,
+                timeout=120,
             )
         finally:
-            self._running = False
+            self._running.discard(symbol)
 
     # -------------------------------------------------
-    # Core Logic (UNCHANGED BUT CLEANED)
+    # Core Execution
+    # -------------------------------------------------
+
+    async def _run(self, symbol: str):
+        self.state_manager.set_state(BotLifecycle.RUNNING_BACKTEST)
+
+        errors = 0
+
+        def _on_complete(sym: str, ok: bool):
+            nonlocal errors
+
+            self.heartbeats[f"{self.name}:{sym}"] = datetime.now(timezone.utc).isoformat()
+
+            self.health_bus.update(
+                f"{self.name}:{sym}",
+                "RUNNING",
+                {"symbol": sym, "ok": ok},
+            )
+
+            if not ok:
+                errors += 1
+
+            asyncio.create_task(
+                self.event_bus.publish(
+                    f"{events.BACKTEST_COMPLETED}:{sym}",
+                    {"symbol": sym, "ok": ok},
+                )
+            )
+
+        ok = await self.backtest.run_symbol(symbol, _on_complete)
+
+        if ok:
+            self._update_state()
+
+        self.state_manager.set_state(BotLifecycle.RUNNING)
+
+    # -------------------------------------------------
+    # Helpers
     # -------------------------------------------------
 
     def _should_run(self) -> bool:
@@ -111,73 +163,9 @@ class BacktestProcess:
         last = self.state_manager.last_backtest_run
         return not last or (now - last >= timedelta(days=90))
 
-    async def _backtest_cycle(self):
-        now = datetime.now(timezone.utc)
-        self.state_manager.set_state(BotLifecycle.RUNNING_BACKTEST)
-
-        self.backtest.initialise()
-
-        errors = 0
-
-        def _on_symbol(symbol: str, ok: bool):
-            nonlocal errors
-
-            self.heartbeats[self.name] = datetime.now(timezone.utc).isoformat()
-
-            self.health_bus.update(
-                self.name,
-                "RUNNING",
-                {
-                    "phase": "backtesting",
-                    "symbol": symbol,
-                    "ok": ok,
-                },
-            )
-
-            if not ok:
-                errors += 1
-            try:
-                asyncio.create_task(
-                    self.event_bus.publish(
-                        f"{events.BACKTEST_COMPLETED}:{symbol}",
-                        {"symbol": symbol, "ok": ok},
-                    )
-                )
-            except Exception:
-                logger.exception("Failed to emit backtest completion for %s", symbol)
-
-        await self.backtest.run_once(
-            on_symbol=_on_symbol,
-            per_symbol_timeout=self.per_symbol_timeout,
-            max_concurrent=self.max_concurrent,
-        )
-
-        # Persist state
-        if errors == 0:
-            self.state_manager.last_backtest_run = now
-            StateManager.save_bot_state(self.state_manager.bot)
-
-        self._apply_backtest_scores()
-
-        self.state_manager.set_state(BotLifecycle.RUNNING)
-
-        # 🔥 Event-driven signal
-        await self.event_bus.publish(
-            events.BACKTEST_COMPLETED,
-            {
-                "symbols": self.symbol_watch.all_symbol_names(),
-                "symbol_count": len(self.symbol_watch.all_symbols),
-                "telemetry": self.symbol_watch.snapshot(),
-            },
-        )
-
-        self.health_bus.update(
-            self.name,
-            "RUNNING",
-            {
-                "symbols": len(self.symbol_watch.all_symbols),
-            },
-        )
+    def _update_state(self):
+        self.state_manager.last_backtest_run = datetime.now(timezone.utc)
+        StateManager.save_bot_state(self.state_manager.bot)
     # -------------------------------------------------
     # Helpers (UNCHANGED)
     # -------------------------------------------------

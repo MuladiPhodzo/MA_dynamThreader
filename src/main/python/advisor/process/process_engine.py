@@ -9,6 +9,7 @@ import threading
 from advisor.core import dependency_graph, health_bus
 from advisor.core.state import BotLifecycle, StateManager
 from advisor.process.heartbeats import HeartbeatRegistry
+from advisor.scheduler.resource_registry import ResourceRegistry
 from advisor.utils.logging_setup import get_logger
 
 logger = get_logger("Orchestrator")
@@ -35,7 +36,7 @@ class Supervisor:
     def __init__(self, shutdown_event: Event, manager: SyncManager, state_manager: StateManager, heartbeats: HeartbeatRegistry):
         self.shutdown = shutdown_event
         self.state_manager = state_manager
-        # self.registry = ResourceRegistry(self.manager)
+        self.registry = ResourceRegistry(manager)
         self.health_bus = health_bus.HealthBus(self.state_manager._manager)
         self.heartbeats = heartbeats.beats
         self.dep_graph = dependency_graph.DependencyGraph()

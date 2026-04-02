@@ -16,8 +16,7 @@ from advisor.utils.logging_setup import get_logger
 logger = get_logger("Strategy_Manager")
 
 STRATEGY_REQS = [
-    ProcessRequirement("market_data", max_age=timedelta(minutes=5)),
-    ProcessRequirement("symbols", max_age=timedelta(minutes=5)),
+    ProcessRequirement("backtest", max_age=timedelta(days=90)),
 ]
 
 class StrategyManager:
@@ -91,7 +90,7 @@ class StrategyManager:
     # -------------------------------------------------
 
     async def _on_market_data(self, symbol: str, event):
-        if self.stop_event.is_set():
+        if self.stop_event.is_set() or self.state.get_state() == BotLifecycle.RUNNING_BACKTEST:
             return
 
         if symbol in self._running:

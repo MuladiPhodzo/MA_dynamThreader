@@ -285,6 +285,7 @@ class Main:
             state_manager=self.state_manager,
             symbol_watch=self.symbol_watch,
             event_bus=self.event_bus,
+            registry=self.orch.registry,
         )
         self.strategy = StrategyManager(
             scheduler=self.scheduler,

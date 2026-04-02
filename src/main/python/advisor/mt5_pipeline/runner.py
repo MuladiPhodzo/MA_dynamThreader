@@ -51,6 +51,7 @@ class pipelineProcess:
         self.max_concurrent = max_concurrent
         self.max_symbol_errors = max(1, int(max_symbol_errors))
         self._running = False
+        self.first_run: bool = True
 
     async def _pipeline_cycle(self):
 
@@ -103,6 +104,7 @@ class pipelineProcess:
 
         try:
             await self.pipeline.run_once(
+                self.first_run,
                 on_symbol=_on_symbol,
                 per_symbol_timeout=self.per_symbol_timeout,
                 max_concurrent=self.max_concurrent,
@@ -127,6 +129,7 @@ class pipelineProcess:
             "RUNNING",
             payload
         )
+        self.first_run = False
 
     def register(self):
         # Event-driven triggers are disabled; pipeline runs on a fixed poll interval.

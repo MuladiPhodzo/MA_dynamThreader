@@ -167,8 +167,12 @@ class ProcessScheduler:
         start_time: datetime,
     ) -> Any:
         """Handle successful execution."""
-        heartbeats[process_name] = datetime.now(timezone.utc).isoformat()
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+        if duration > 10:
+            logger.info("[%s] Completed in %.2fs", process_name, duration)
+        else:
+            logger.debug("[%s] Completed in %.2fs", process_name, duration)
+        heartbeats[process_name] = datetime.now(timezone.utc).isoformat()
         logger.info("[%s] Completed in %.2fs", process_name, duration)
         return None
 

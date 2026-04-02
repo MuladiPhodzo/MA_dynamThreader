@@ -30,15 +30,15 @@ class MetaTrader5Client:
         self.account_info = None
 
         self.TF_dict = {
-            '5M': {"tf_val": mt5.TIMEFRAME_M5, "prox_limit": 2100, "interval_minutes": 5},
-            '15M': {"tf_val": mt5.TIMEFRAME_M15, "prox_limit": 200, "interval_minutes": 15},
-            '30M': {"tf_val": mt5.TIMEFRAME_M30, "prox_limit": 200, "interval_minutes": 30},
-            '1H': {"tf_val": mt5.TIMEFRAME_H1, "prox_limit": 250, "interval_minutes": 60},
-            '2H': {"tf_val": mt5.TIMEFRAME_H2, "prox_limit": 300, "interval_minutes": 120},
-            '4H': {"tf_val": mt5.TIMEFRAME_H4, "prox_limit": 350, "interval_minutes": 240},
-            '6H': {"tf_val": mt5.TIMEFRAME_H6, "prox_limit": 400, "interval_minutes": 360},
-            '8H': {"tf_val": mt5.TIMEFRAME_H8, "prox_limit": 450, "interval_minutes": 480},
-            '1D': {"tf_val": mt5.TIMEFRAME_D1, "prox_limit": 500, "interval_minutes": 1440},
+            '5M': {"tf_val": mt5.TIMEFRAME_M5, "prox_limit": 50, "interval_minutes": 5},
+            '15M': {"tf_val": mt5.TIMEFRAME_M15, "prox_limit": 100, "interval_minutes": 15},
+            '30M': {"tf_val": mt5.TIMEFRAME_M30, "prox_limit": 100, "interval_minutes": 30},
+            '1H': {"tf_val": mt5.TIMEFRAME_H1, "prox_limit": 150, "interval_minutes": 60},
+            '2H': {"tf_val": mt5.TIMEFRAME_H2, "prox_limit": 200, "interval_minutes": 120},
+            '4H': {"tf_val": mt5.TIMEFRAME_H4, "prox_limit": 250, "interval_minutes": 240},
+            '6H': {"tf_val": mt5.TIMEFRAME_H6, "prox_limit": 300, "interval_minutes": 360},
+            '8H': {"tf_val": mt5.TIMEFRAME_H8, "prox_limit": 350, "interval_minutes": 480},
+            '1D': {"tf_val": mt5.TIMEFRAME_D1, "prox_limit": 400, "interval_minutes": 1440},
         }
 
         self.data_executor = ThreadPoolExecutor(max_workers=5)
