@@ -10,11 +10,11 @@ from advisor.Trade.trade_engine import ExecutionProcess
 from advisor.Trade.trateState import TradeStateManager
 from advisor.backtest.engine import BacktestProcess
 from advisor.bootstrap.sys_bootstrap import BootstrapError, SystemBootstrap
-from advisor.core.state import BotLifecycle, StateManager, SymbolState, BotState
+from advisor.core.state import BotLifecycle, StateManager, SymbolState, BotState, symbolCycle
 from advisor.core.event_bus import EventBus
 from advisor.core.flow_state import FlowStateStore
-from advisor.indicators.signal_store import SignalStore
-from advisor.indicators.strategy import StrategyManager
+from Strategy_model.indicators.signal_store import SignalStore
+from Strategy_model.indicators.strategy import StrategyManager
 from advisor.mt5_pipeline.runner import pipelineProcess
 from advisor.process.heartbeats import HeartbeatRegistry
 from advisor.process.process_engine import Supervisor
@@ -41,34 +41,35 @@ class Main:
             "strategy": Event(),
             "execution": Event(),
         }
-        self.bootstrap = SystemBootstrap()
         self.manager = SyncManager()
         self.manager.start()
-        self.state_manager = StateManager(self.manager)
+        self.event_bus = EventBus()
         self.scheduler = ProcessScheduler(None)
         self.heartbeats = HeartbeatRegistry()
         self.signal_store = SignalStore()
         self.flow_state = FlowStateStore()
-        self.flow_state.restore_signal_store(self.signal_store)
-        self.event_bus = EventBus()
+
+        self.bootstrap = SystemBootstrap(self.manager)
+        self._load_configs()
+        self.state_manager = self.bootstrap.state
         self.client: MetaTrader5Client | None = None
+
+        self.flow_state.restore_signal_store(self.signal_store)
         self.trade_state: TradeStateManager | None = None
         self.cache_handler = CacheManager(persist=True)
-        self.orch = Supervisor(self.shutdown_event, self.manager, self.state_manager, self.heartbeats)
 
-        self.bot_state = self.state_manager.bot
-        self.symbol_watch = SymbolWatch(self.bot_state)
+        self.symbol_watch = SymbolWatch(self.state_manager.bot)
 
         if not self.symbol_watch.all_symbols:
             logger.warning("No symbols loaded in bot state; configure symbols in configs.json or bot_state.json.")
         elif not self.symbol_watch.active_symbols:
             logger.warning("No active symbols enabled; enable symbols via configs.json, bot_state.json, or /symbols/toggle.")
-        self.objects = None
+
+        self.orch = Supervisor(self.shutdown_event, self.manager, self.state_manager, self.heartbeats)
         self.dashboard = None
         self._symbol_sync_thread: Thread | None = None
 
     async def initialize(self):
-        self._load_configs()
         await self._connect_client()
         self._init_core_instances()
         await self._ensure_symbols()
@@ -85,17 +86,11 @@ class Main:
                 logger.critical("Bootstrap failed: %s", e)
                 raise
 
-        self.config = boot.get("config")
+        self.config = boot
         try:
-            self._config_symbols_empty = not bool(self.config.symbols or {})
+            self._config_symbols_empty = not bool(self.state_manager.bot.symbols or {})
         except Exception:
             self._config_symbols_empty = True
-        self.client = boot.get("client")
-        self.objects = {
-            "creds": self.config.creds,
-            "trade_configs": self.config.trade,
-            "account_data": self.config.account,
-        }
 
     def _configs_missing(self) -> bool:
         config_path = self._config_path()
@@ -110,7 +105,7 @@ class Main:
         logger.warning("No configs.json found. Launching setup wizard.")
         StateManager.save_bot_state(BotState())
 
-        wizard = setUpWizard(MetaTrader5Client())
+        wizard = setUpWizard(self.client)
         user_data = getattr(wizard, "user_data", None) or {}
         creds = user_data.get("creds")
         trade_cfg = user_data.get("trade_cfg")
@@ -145,11 +140,10 @@ class Main:
 
     async def _connect_client(self):
         if self.client is None:
-            logger.info(f"initializing MT5 client with server={self.objects['creds']['server']} account_id={self.objects['creds']['account_id']}")
-            self.client = MetaTrader5Client()
+            logger.info(f"initializing MT5 client with server={self.config.creds['server']} account_id={self.config.creds['account_id']}")
+            self.client = MetaTrader5Client(self.state_manager)
 
-        # Avoid fetching all symbols during login; we'll sync on-demand.
-        success = self.client.initialize(self.objects["creds"], fetch_symbols=False)
+        success = self.client.initialize(self.config.creds)
         if getattr(self.client, "account_info", None):
             return
         self.orch.health_bus.update(self.name, "RUNNING", {"phase": "initializing"})
@@ -163,7 +157,7 @@ class Main:
     async def _ensure_symbols(self):
         config_symbols = {}
         try:
-            config_symbols = self.config.symbols or {}
+            config_symbols = self.state_manager.bot.symbols or {}
         except Exception:
             config_symbols = {}
         self._config_symbols_empty = not bool(config_symbols)
@@ -203,6 +197,7 @@ class Main:
                         symbol=sym,
                         enabled=False,
                         last_backtest=self.state_manager.last_backtest_run,
+                        state=symbolCycle.STAND_BY
                     )
                 updated.append(state)
 
@@ -263,6 +258,14 @@ class Main:
             raise RuntimeError("MT5 client not initialized")
 
         self.trade_state = TradeStateManager(self.client)
+        backtest_cfg = {}
+        try:
+            backtest_cfg = (self.config.data or {}).get("backtest", {})
+        except Exception:
+            backtest_cfg = {}
+        run_on_first_start = bool(backtest_cfg.get("run_on_first_start", True))
+        run_if_no_enabled = bool(backtest_cfg.get("run_if_no_enabled", True))
+
         self.pipeline = pipelineProcess(
             client=self.client,
             cache_handler=self.cache_handler,
@@ -286,6 +289,8 @@ class Main:
             symbol_watch=self.symbol_watch,
             event_bus=self.event_bus,
             registry=self.orch.registry,
+            run_on_first_start=run_on_first_start,
+            run_if_no_enabled=run_if_no_enabled,
         )
         self.strategy = StrategyManager(
             scheduler=self.scheduler,

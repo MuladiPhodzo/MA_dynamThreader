@@ -1,21 +1,19 @@
-import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from multiprocessing import Manager
 from multiprocessing.managers import SyncManager
-from pathlib import Path
 from typing import Any, Callable, Optional
 
-from advisor.core.locks import STATE_LOCK
+from advisor.bootstrap.state_loader import StateStore
+from advisor.utils.logging_setup import get_logger
 
+logger = get_logger("_State_Manager_")
 
 # =========================================================
 # CONSTANTS
 # =========================================================
-
-STATE_FILE = Path("bot_state.json")
 
 class BotLifecycle(Enum):
     STARTING = 1
@@ -65,8 +63,6 @@ class SymbolState:
             "Pip_size": 0,
         }
     )
-
-
 @dataclass
 class BotState:
     version: str = "1.0"
@@ -120,13 +116,9 @@ def _build_symbols(symbol_map: dict[str, Any]) -> list[SymbolState]:
 def _fresh_state() -> BotState:
     new = BotState()
     try:
-        from advisor.bootstrap.config_loader import UserConfig
-
-        cfg = UserConfig()
-        new.symbols = _build_symbols(cfg.symbols)
+        StateManager.save_bot_state(new)
     except Exception:
         pass
-    StateManager.save_bot_state(new)
     logging.warning("State file missing or empty. Creating fresh state.")
     return new
 
@@ -142,6 +134,7 @@ class StateManager:
             manager = Manager()
         self._manager = manager
         self._lifecycle = manager.Value("i", BotLifecycle.STARTING.value)
+        self.fetch_symbols = False
         self.bot = self.load_bot_state()
         self.bot.state = self.get_state()
     # -----------------------------------------------------
@@ -154,6 +147,12 @@ class StateManager:
 
     def get_state(self) -> BotLifecycle:
         return BotLifecycle(self._lifecycle.value)
+
+    def set_symbol_state(self, name, new_state: symbolCycle):
+        for sym in self.bot.symbols:
+            if sym.symbol == name:
+                sym.state.value = new_state.value
+                break
 
     @property
     def last_backtest_run(self) -> Optional[datetime]:
@@ -183,56 +182,28 @@ class StateManager:
 
     @staticmethod
     def load_bot_state() -> BotState:
+        store = StateStore()
+        if store.state.__eq__({}):
+            return _fresh_state()
 
-        with STATE_LOCK:
-            if STATE_FILE.exists() and STATE_FILE.is_dir():
-                try:
-                    STATE_FILE.rmdir()
-                except Exception as e:
-                    logging.critical(f"State file path is a directory and could not be removed: {e}")
-                    return BotState()
-            if not STATE_FILE.exists():
-                STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-                return _fresh_state()
-            if STATE_FILE.stat().st_size == 0:
-                return _fresh_state()
+        try:
 
-            try:
-                with open(STATE_FILE, "r") as f:
-                    raw = json.load(f)
+            symbols = _build_symbols(store.state.get("symbols", {}))
+            if not symbols:
+                logger.info("No symbols available in state file")
 
-                symbols = _build_symbols(raw.get("symbols", {}))
-                if not symbols:
-                    try:
-                        from advisor.bootstrap.config_loader import UserConfig
+            return BotState(
+                version=store.state.get("version", "1.0"),
+                last_backtest_run=StateManager._parse_dt(store.state.get("last_backtest_run")),
+                next_backtest_run=StateManager._parse_dt(store.state.get("next_backtest_run")),
+                symbols=symbols,
+                backtest_running=store.state.get("backtest_running", False),
+                live_trading_enabled=store.state.get("live_trading_enabled", True),
+            )
 
-                        cfg = UserConfig()
-                        symbols = _build_symbols(cfg.symbols)
-                        raw["symbols"] = cfg.symbols
-                        tmp_state = BotState(
-                            version=raw.get("version", "1.0"),
-                            last_backtest_run=StateManager._parse_dt(raw.get("last_backtest_run")),
-                            next_backtest_run=StateManager._parse_dt(raw.get("next_backtest_run")),
-                            symbols=symbols,
-                            backtest_running=raw.get("backtest_running", False),
-                            live_trading_enabled=raw.get("live_trading_enabled", True),
-                        )
-                        StateManager.save_bot_state(tmp_state)
-                    except Exception:
-                        pass
-
-                return BotState(
-                    version=raw.get("version", "1.0"),
-                    last_backtest_run=StateManager._parse_dt(raw.get("last_backtest_run")),
-                    next_backtest_run=StateManager._parse_dt(raw.get("next_backtest_run")),
-                    symbols=symbols,
-                    backtest_running=raw.get("backtest_running", False),
-                    live_trading_enabled=raw.get("live_trading_enabled", True),
-                )
-
-            except Exception as e:
-                logging.critical(f"State file corrupted. Resetting. Error: {e}")
-                return _fresh_state()
+        except Exception as e:
+            logging.critical(f"State file corrupted. Resetting. Error: {e}")
+            return _fresh_state()
 
     # -----------------------------------------------------
     # SAVE BOT STATE (Atomic)
@@ -240,36 +211,28 @@ class StateManager:
 
     @staticmethod
     def save_bot_state(state: BotState):
-
-        with STATE_LOCK:
-
-            payload = {
-                "version": state.version,
-                "last_backtest_run": StateManager._serialize_dt(state.last_backtest_run),
-                "next_backtest_run": StateManager._serialize_dt(state.next_backtest_run),
-                "backtest_running": state.backtest_running,
-                "live_trading_enabled": state.live_trading_enabled,
-                "symbols": {
-                    sym.symbol: {
-                        "score": sym.score,
-                        "last_backtest": StateManager._serialize_dt(sym.last_backtest),
-                        "enabled": sym.enabled,
-                        "meta": sym.meta or {},
-                    }
-                    for sym in state.symbols
+        payload = {
+            "version": state.version,
+            "last_backtest_run": StateManager._serialize_dt(state.last_backtest_run),
+            "next_backtest_run": StateManager._serialize_dt(state.next_backtest_run),
+            "backtest_running": state.backtest_running,
+            "live_trading_enabled": state.live_trading_enabled,
+            "symbols": {
+                sym.symbol: {
+                    "score": sym.score,
+                    "last_backtest": StateManager._serialize_dt(sym.last_backtest),
+                    "enabled": sym.enabled,
+                    "meta": sym.meta or {},
                 }
+                for sym in state.symbols
             }
+        }
 
-            tmp = STATE_FILE.with_suffix(".tmp")
+        try:
+            StateStore.save_bot_state(payload)
 
-            try:
-                with open(tmp, "w") as f:
-                    json.dump(payload, f, indent=2)
-
-                tmp.replace(STATE_FILE)
-
-            except Exception as e:
-                logging.error(f"Failed to persist bot state: {e}")
+        except Exception as e:
+            logging.error(f"Failed to persist bot state: {e}")
 
     # -----------------------------------------------------
     # BACKTEST SCHEDULING

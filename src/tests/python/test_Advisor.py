@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from advisor.core.state import BotState, StateManager
-from advisor.indicators.signal_store import SignalStore
+from Strategy_model.indicators.signal_store import SignalStore
 
 
 def test_signal_store_round_trip():

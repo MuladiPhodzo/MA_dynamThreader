@@ -104,7 +104,6 @@ class pipelineProcess:
 
         try:
             await self.pipeline.run_once(
-                self.first_run,
                 on_symbol=_on_symbol,
                 per_symbol_timeout=self.per_symbol_timeout,
                 max_concurrent=self.max_concurrent,

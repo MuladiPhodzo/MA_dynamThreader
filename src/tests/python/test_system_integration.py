@@ -7,8 +7,8 @@ import pytest
 from advisor.core.event_bus import EventBus
 from advisor.core import events
 from advisor.core.state import BotLifecycle, Strategy, SymbolState
-from advisor.indicators.signal_store import SignalStore
-from advisor.indicators.strategy import StrategyManager
+from Strategy_model.indicators.signal_store import SignalStore
+from Strategy_model.indicators.strategy import StrategyManager
 from advisor.Trade.trade_engine import ExecutionProcess
 
 

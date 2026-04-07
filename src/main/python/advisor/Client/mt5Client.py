@@ -9,18 +9,19 @@ import pandas as pd
 from pandas.plotting import register_matplotlib_converters
 import MetaTrader5 as mt5
 from advisor.utils.logging_setup import get_logger
+from advisor.core.state import BotLifecycle, StateManager
 register_matplotlib_converters()
 
 logger = get_logger(__name__)
 
 class MetaTrader5Client:
-    def __init__(self):
+    def __init__(self, state: StateManager):
         self.symbols = []
         self.trade_cfg = None
         self.account_info = None
         self.terminal_info = None
         self.THRESHOLD = 0.0100
-        self.backtest = True
+        self.state = state
 
         self._tf_last_fetch = {}      # {(symbol, tf): datetime}
         self._symbol_lock = threading.RLock()
@@ -31,33 +32,33 @@ class MetaTrader5Client:
 
         self.TF_dict = {
             '5M': {"tf_val": mt5.TIMEFRAME_M5, "prox_limit": 50, "interval_minutes": 5},
-            '15M': {"tf_val": mt5.TIMEFRAME_M15, "prox_limit": 100, "interval_minutes": 15},
+            '15M': {"tf_val": mt5.TIMEFRAME_M15, "prox_limit": 75, "interval_minutes": 15},
             '30M': {"tf_val": mt5.TIMEFRAME_M30, "prox_limit": 100, "interval_minutes": 30},
-            '1H': {"tf_val": mt5.TIMEFRAME_H1, "prox_limit": 150, "interval_minutes": 60},
-            '2H': {"tf_val": mt5.TIMEFRAME_H2, "prox_limit": 200, "interval_minutes": 120},
-            '4H': {"tf_val": mt5.TIMEFRAME_H4, "prox_limit": 250, "interval_minutes": 240},
-            '6H': {"tf_val": mt5.TIMEFRAME_H6, "prox_limit": 300, "interval_minutes": 360},
-            '8H': {"tf_val": mt5.TIMEFRAME_H8, "prox_limit": 350, "interval_minutes": 480},
-            '1D': {"tf_val": mt5.TIMEFRAME_D1, "prox_limit": 400, "interval_minutes": 1440},
+            '1H': {"tf_val": mt5.TIMEFRAME_H1, "prox_limit": 125, "interval_minutes": 60},
+            '2H': {"tf_val": mt5.TIMEFRAME_H2, "prox_limit": 150, "interval_minutes": 120},
+            '4H': {"tf_val": mt5.TIMEFRAME_H4, "prox_limit": 200, "interval_minutes": 240},
+            '6H': {"tf_val": mt5.TIMEFRAME_H6, "prox_limit": 250, "interval_minutes": 360},
+            '8H': {"tf_val": mt5.TIMEFRAME_H8, "prox_limit": 300, "interval_minutes": 480},
+            '1D': {"tf_val": mt5.TIMEFRAME_D1, "prox_limit": 500, "interval_minutes": 1440},
         }
 
         self.data_executor = ThreadPoolExecutor(max_workers=5)
 
     def _determine_bar_count(self, timeframe):
-        if self.backtest:
+        if self.state.get_state() == BotLifecycle.RUNNING_BACKTEST:
             if timeframe in ("1M", "5M", "15M") :
                 return 3000
             if timeframe in ("30M", "1H", "2H"):
                 return 2500
             if timeframe in ("4H", "6H", "8H"):
-                return 1500
+                return 2000
             if timeframe in ("1D",):
-                return 500
+                return 1500
             return 1000
         else:
-            return 100
+            return 500
 
-    def initialize(self, user_data, fetch_symbols: bool = True):
+    def initialize(self, user_data):
         logger.info("🔑 Logging in to MetaTrader 5...")
         try:
 
@@ -67,15 +68,11 @@ class MetaTrader5Client:
                 messagebox.showerror(
                     "Connection failed", f"Failed to log in with error code ={mt5.last_error()}")
                 logger.info(f"failed to log in with error code ={mt5.last_error()}")
-                self.close()
-                return False
+                return self.close()
             else:
                 self.account_info = mt5.account_info()._asdict()
                 self.terminal_info = mt5.terminal_info()._asdict()
                 self.creds = user_data
-                if fetch_symbols:
-                    logger.info('fetching all available symbols...')
-                    self.symbols = self.get_Symbols()
 
             logger.info(f"✅ Successfully connected to MT5 account {user_data['account_id']} on server '{user_data['server']}'")
             return True

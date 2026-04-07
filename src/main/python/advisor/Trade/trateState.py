@@ -24,7 +24,7 @@ class TradeStateManager:
         return sum(1 for trade in self.active.values() if trade.get("symbol") == symbol)
 
     def sync_closed(self):
-        utc_from = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=5)
+        utc_from = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=10)
         deals = self.client.get_history(utc_from)
         if not deals:
             return

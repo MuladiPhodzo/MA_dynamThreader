@@ -8,7 +8,7 @@ from advisor.core.health_bus import HealthBus
 from advisor.core.event_bus import EventBus
 from advisor.core import events
 from advisor.core.state import BotLifecycle, StateManager
-from advisor.indicators.signal_store import SignalStore
+from Strategy_model.indicators.signal_store import SignalStore
 from advisor.scheduler.process_sceduler import ProcessScheduler
 from advisor.scheduler.requirements import ProcessRequirement
 from advisor.Client.symbols.symbol_watch import SymbolWatch

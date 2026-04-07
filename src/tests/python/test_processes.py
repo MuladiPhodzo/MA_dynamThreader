@@ -5,8 +5,8 @@ import pytest
 
 from advisor.core import dependency_graph, events
 from advisor.core.state import BotState, BotLifecycle, Strategy, SymbolState
-from advisor.indicators.signal_store import SignalStore
-from advisor.indicators.strategy import StrategyManager
+from Strategy_model.indicators.signal_store import SignalStore
+from Strategy_model.indicators.strategy import StrategyManager
 from advisor.backtest import engine as backtest_engine
 from advisor.Trade.trade_engine import ExecutionProcess
 

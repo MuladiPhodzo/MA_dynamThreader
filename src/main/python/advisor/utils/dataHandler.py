@@ -318,7 +318,7 @@ class DataHandler:
             else:
                 raise ValueError("Unsupported file type. Use 'json' or 'csv'.")
 
-    def save_data_toCSVFile(self, data, file_path: Path | str):
+    def save_data_toFile(self, data, file_path: Path | str):
         import tabulate
         """
         Save data to a CSV + formatted TXT table.
@@ -334,7 +334,7 @@ class DataHandler:
 
         df = pd.DataFrame(data)
         timestamp = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
-        path = Path(file_path)
+        path = Path(f"{str(self.base_dir)}/{str(file_path)}")
         # Auto-create folder if it doesn't exist
         path.parent.mkdir(parents=True, exist_ok=True)
 

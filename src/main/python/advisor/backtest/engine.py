@@ -40,6 +40,8 @@ class BacktestProcess:
         registry: ResourceRegistry,
         per_symbol_timeout: float = 120.0,
         max_concurrent: int = 4,
+        run_on_first_start: bool = True,
+        run_if_no_enabled: bool = True,
     ):
         self.client = client
         self.cache = cache_handler
@@ -57,6 +59,9 @@ class BacktestProcess:
 
         self.per_symbol_timeout = per_symbol_timeout
         self.max_concurrent = max_concurrent
+        self.run_on_first_start = run_on_first_start
+        self.run_if_no_enabled = run_if_no_enabled
+        self._no_enabled_forced = False
 
         self._running: set[str] = set()  # prevent duplicate runs per symbol
         self._subscribed_symbols: set[str] = set()
@@ -104,7 +109,7 @@ class BacktestProcess:
             return
 
         self._running.add(symbol)
-
+        
         try:
             await self.scheduler.schedule(
                 process_name=f"{self.name}:{symbol}",
@@ -161,7 +166,22 @@ class BacktestProcess:
     def _should_run(self) -> bool:
         now = datetime.now(timezone.utc)
         last = self.state_manager.last_backtest_run
-        return not last or (now - last >= timedelta(days=90))
+        if self.run_on_first_start and last is None:
+            return True
+
+        if self.run_if_no_enabled:
+            if self._has_enabled_symbols():
+                self._no_enabled_forced = False
+            elif not self._no_enabled_forced:
+                self._no_enabled_forced = True
+                return True
+
+        if last is None:
+            return False
+        return now - last >= timedelta(days=90)
+
+    def _has_enabled_symbols(self) -> bool:
+        return any(sym.enabled for sym in (self.state_manager.bot.symbols or []))
 
     def _update_state(self):
         self.state_manager.last_backtest_run = datetime.now(timezone.utc)

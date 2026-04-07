@@ -1,7 +1,8 @@
-from advisor.Client.mt5Client import MetaTrader5Client
+from multiprocessing.managers import SyncManager
+
 from advisor.bootstrap.config_loader import ConfigError, UserConfig
-from advisor.bootstrap.state_loader import StateStore
 from advisor.utils.logging_setup import get_logger
+from advisor.core.state import StateManager
 
 logger = get_logger("BOOTSTRAP")
 
@@ -11,40 +12,31 @@ class BootstrapError(Exception):
 
 
 class SystemBootstrap:
-    def __init__(self, mt5_client_class=MetaTrader5Client):
-        self.mt5_client_class = mt5_client_class
+    def __init__(self, manager: SyncManager):
+        self.manager = manager
         self.config = None
         self.state = None
-        self.client = None
 
-    def initialize(self):
+    def initialize(self) -> UserConfig | None:
+        """_summary_
+            loads config files and syncing saved states for a new run
+        Returns:
+            UserConfig | None: a user configeration data class loaded from a file
+        """        
         self._load_user_config()
         self._load_state()
-        # self._initialize_broker()
-        # self._verify_account()
-        # self._sync_account_state_once()
-        return {"client": self.client, "config": self.config, "state": self.state}
+        return self.config
 
     def _load_user_config(self):
         try:
+            logger.info("loading user configs")
             self.config = UserConfig()
         except ConfigError as e:
             raise BootstrapError(str(e))
 
     def _load_state(self):
-        self.state = StateStore()
-
-    def _initialize_broker(self):
-        creds = self.config.creds
-        self.client = self.mt5_client_class()
-        data = {
-            "server": creds["server"],
-            "account_id": creds["account_id"],
-            "password": creds["password"],
-        }
-        success = self.client.initialize(data)
-        if not success:
-            raise BootstrapError("Broker connection failed.")
+        logger.info("loading saved bot state")
+        self.state = StateManager(self.manager)
 
     def _verify_account(self):
         info = getattr(self.client, "account_info", None)

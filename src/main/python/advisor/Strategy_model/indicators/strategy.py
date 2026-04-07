@@ -6,7 +6,7 @@ from advisor.core.health_bus import HealthBus
 from advisor.core.event_bus import EventBus
 from advisor.core import events
 from advisor.core.state import BotLifecycle, StateManager, Strategy, SymbolState
-from advisor.indicators.signal_store import SignalStore
+from Strategy_model.indicators.signal_store import SignalStore
 from advisor.scheduler.process_sceduler import ProcessScheduler
 from advisor.scheduler.requirements import ProcessRequirement
 from advisor.utils import dataHandler
@@ -47,6 +47,8 @@ class StrategyManager:
 
         self._running: set[str] = set()  # prevent duplicate runs per symbol
         self._subscribed_symbols: set[str] = set()
+        self._logged_cache_ready: set[str] = set()
+        self._logged_cache_empty: set[str] = set()
 
     # -------------------------------------------------
     # Registration (NO LOOP)
@@ -134,7 +136,6 @@ class StrategyManager:
             return
 
         produced = 0
-
         for strat in state.strategies:
             try:
                 payload = await asyncio.to_thread(
@@ -177,10 +178,41 @@ class StrategyManager:
     def _symbol_ready(self, symbol: SymbolState) -> bool:
         cached = self.cache.get(symbol.symbol)
         if cached:
+            self._log_cache_ready(symbol.symbol, cached)
             return True
 
+        self._log_cache_empty(symbol.symbol)
         telem = self.symbol_watch.get_telemetry(symbol.symbol)
         return telem and telem.data_fetch_count > 0
+
+    def _log_cache_ready(self, symbol: str, data) -> None:
+        if symbol in self._logged_cache_ready:
+            return
+        self._logged_cache_ready.add(symbol)
+        summary = self._summarize_cache(data)
+        logger.info("Strategy data ready for %s: %s", symbol, summary)
+
+    def _log_cache_empty(self, symbol: str) -> None:
+        if symbol in self._logged_cache_empty:
+            return
+        self._logged_cache_empty.add(symbol)
+        logger.info("Strategy data missing for %s (cache empty at init)", symbol)
+
+    def _summarize_cache(self, data) -> str:
+        if isinstance(data, dict):
+            parts = []
+            for tf, df in data.items():
+                rows = None
+                try:
+                    rows = len(df) if hasattr(df, "__len__") else None
+                except Exception:
+                    rows = None
+                if rows is None:
+                    parts.append(str(tf))
+                else:
+                    parts.append(f"{tf}:{rows}")
+            return "tfs=" + ",".join(parts) if parts else "tfs=none"
+        return f"type={type(data).__name__}"
 
     def _log_warmup(self, symbol: str) -> None:
         logger.debug("%s: waiting for warm-up data", symbol)

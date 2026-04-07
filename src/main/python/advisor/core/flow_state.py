@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from advisor.indicators.signal_store import SignalStore
+from Strategy_model.indicators.signal_store import SignalStore
 from advisor.utils.logging_setup import get_logger
 
 logger = get_logger("FlowStateStore")

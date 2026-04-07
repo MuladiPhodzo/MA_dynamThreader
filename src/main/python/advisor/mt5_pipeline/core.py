@@ -85,7 +85,6 @@ class MarketDataPipeline:
 
     async def run_once(
         self,
-        first_run: bool,
         on_symbol: Callable[[str, bool], None] | None = None,
         per_symbol_timeout: float | None = None,
         max_concurrent: int | None = None,
@@ -105,6 +104,8 @@ class MarketDataPipeline:
             try:
                 if semaphore:
                     async with semaphore:
+                        sym_state = self.symbol_watch.get(symbol)
+                        first_run = True if sym_state.last_backtest is None else False
                         data = await self._ingest_with_timeout(symbol, first_run, per_symbol_timeout)
                 else:
                     data = await self._ingest_with_timeout(symbol, first_run, per_symbol_timeout)
