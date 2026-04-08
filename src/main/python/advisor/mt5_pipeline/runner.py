@@ -184,7 +184,19 @@ class pipelineProcess:
                 self.health_bus.update(self.name, "ERROR", {"error": str(e)})
             if not self.stop_event.is_set():
                 logger.info("Pipeline process sleeping for %d seconds", self.poll_interval)
-                self.stop_event.wait(self.poll_interval)
+                # Keep heartbeats alive during sleep to avoid orchestrator timeouts.
+                remaining = float(self.poll_interval)
+                while remaining > 0 and not self.stop_event.is_set():
+                    stamp = datetime.now(timezone.utc).isoformat()
+                    self.heartbeats[self.name] = stamp
+                    self.health_bus.update(
+                        self.name,
+                        "RUNNING",
+                        {"phase": "sleeping"},
+                    )
+                    step = min(30.0, remaining)
+                    self.stop_event.wait(step)
+                    remaining -= step
 
     def _disable_symbol(self, symbol: str, reason: str) -> None:
         try:

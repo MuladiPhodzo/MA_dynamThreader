@@ -111,14 +111,22 @@ class BacktestProcess:
         self._running.add(symbol)
         
         try:
+            async def _task():
+                return await self._run(symbol)
+
             await self.scheduler.schedule(
                 process_name=f"{self.name}:{symbol}",
                 required_resources=[],
-                task=lambda: self._run(symbol),
+                task=_task,
                 shutdown_event=self.stop_event,
                 heartbeats=self.heartbeats,
                 timeout=120,
             )
+        except SystemExit:
+            # Shutdown in progress; avoid unhandled task exceptions
+            return
+        except Exception:
+            logger.exception("Backtest trigger failed for %s", symbol)
         finally:
             self._running.discard(symbol)
 

@@ -1,4 +1,4 @@
-from advisor.core.state import SymbolState
+from advisor.core.state import SymbolState, symbolCycle
 
 
 WEIGHTS = {
@@ -49,4 +49,4 @@ class metrics:
         self.symbol.score += WEIGHTS["max_drawdown"] * (1 - self.normalize(max_drawdown, 0.05, 0.30))
 
         self.symbol.score = round(self.symbol.score, 4)
-        self.symbol.state.value(4)
+        self.symbol.state = symbolCycle.READY if self.symbol.score >= 0.6 else symbolCycle.DEGRADED

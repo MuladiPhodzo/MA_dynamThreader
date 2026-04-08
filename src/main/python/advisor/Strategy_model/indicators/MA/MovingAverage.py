@@ -123,7 +123,7 @@ class MovingAverageCrossover:
         """Classify bullish trend strength."""
         if count >= (ls_len - 2) and prox_true >= max(3, ls_len - 1):
             return "(S)Bullish"
-        if count >= 5 and prox_true >= 5:
+        if count >= 6 and prox_true >= 6:
             return "Bullish"
         return "(W)Bullish"
 
@@ -209,74 +209,77 @@ class MovingAverageCrossover:
         Returns (Outcome, ExitPrice, ExitIndex)
         """
 
-        future = df.iloc[entry_pos + 1:]
+        # Include entry candle in scan
+        future = df.iloc[entry_pos:]
 
-        for pos, (idx, row) in enumerate(future.iterrows(), start=entry_pos + 1):
+        for pos, (idx, row) in enumerate(future.iterrows(), start=entry_pos):
 
             price_high = row["high"]
             price_low = row["low"]
 
-            # BUY: price must hit TP or SL
+            # BUY: price must hit TP or SL (high/low/close)
             if entry_type == "Buy":
 
-                if price_low <= sl:
+                if price_low <= sl or row["close"] <= sl:
                     return "Loss", sl, pos
 
-                if price_high >= tp:
+                if price_high >= tp or row["close"] >= tp:
                     return "Profit", tp, pos
 
-            # SELL: reversed SL/TP checks
+            # SELL: reversed SL/TP checks (high/low/close)
             else:
 
-                if price_high >= sl:
+                if price_high >= sl or row["close"] >= sl:
                     return "Loss", sl, pos
 
-                if price_low <= tp:
+                if price_low <= tp or row["close"] <= tp:
                     return "Profit", tp, pos
 
         # If never hit SL/TP — optional behavior
         return "NoHit", entry_price, None
 
-    def _evaluate_trade_outcome_fast(self, high, low, entry_pos, entry_type, entry_price, sl, tp):
+    def _evaluate_trade_outcome_fast(self, high, low, close, entry_pos, entry_type, entry_price, sl, tp):
         """
         Fast, vectorized outcome scan using numpy arrays.
         Preserves original SL-first priority when both hit in the same candle.
         Returns (Outcome, ExitPrice, ExitIndex)
         """
-        future_high = high[entry_pos + 1:]
-        future_low = low[entry_pos + 1:]
+        # Include entry candle in scan
+        future_high = high[entry_pos:]
+        future_low = low[entry_pos:]
+        future_close = close[entry_pos:]
 
         if entry_type == "Buy":
-            sl_hits = np.flatnonzero(future_low <= sl)
-            tp_hits = np.flatnonzero(future_high >= tp)
+            sl_hits = np.flatnonzero((future_low <= sl) | (future_close <= sl))
+            tp_hits = np.flatnonzero((future_high >= tp) | (future_close >= tp))
             sl_idx = sl_hits[0] if sl_hits.size else None
             tp_idx = tp_hits[0] if tp_hits.size else None
 
             if sl_idx is None and tp_idx is None:
                 return "NoHit", entry_price, None
             if sl_idx is None:
-                return "Profit", tp, entry_pos + 1 + tp_idx
+                return "Profit", tp, entry_pos + tp_idx
             if tp_idx is None:
-                return "Loss", sl, entry_pos + 1 + sl_idx
+                return "Loss", sl, entry_pos + sl_idx
             if tp_idx < sl_idx:
-                return "Profit", tp, entry_pos + 1 + tp_idx
-            return "Loss", sl, entry_pos + 1 + sl_idx
+                return "Profit", tp, entry_pos + tp_idx
+            return "Loss", sl, entry_pos + sl_idx
 
         # SELL: SL/TP reversed
-        sl_hits = np.flatnonzero(future_high >= sl)
-        tp_hits = np.flatnonzero(future_low <= tp)
+        sl_hits = np.flatnonzero((future_high >= sl) | (future_close >= sl))
+        tp_hits = np.flatnonzero((future_low <= tp) | (future_close <= tp))
         sl_idx = sl_hits[0] if sl_hits.size else None
         tp_idx = tp_hits[0] if tp_hits.size else None
 
         if sl_idx is None and tp_idx is None:
             return "NoHit", entry_price, None
         if sl_idx is None:
-            return "Profit", tp, entry_pos + 1 + tp_idx
+            return "Profit", tp, entry_pos + tp_idx
         if tp_idx is None:
-            return "Loss", sl, entry_pos + 1 + sl_idx
+            return "Loss", sl, entry_pos + sl_idx
         if tp_idx < sl_idx:
-            return "Profit", tp, entry_pos + 1 + tp_idx
-        return "Loss", sl, entry_pos + 1 + sl_idx
+            return "Profit", tp, entry_pos + tp_idx
+        return "Loss", sl, entry_pos + sl_idx
 
     def _apply_precision(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -707,6 +710,164 @@ class MovingAverageCrossover:
             "PnL_Pips": pnl_pips,
         }
 
+    def _init_backtest_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        for col in ["ExitPrice", "ExitIndex", "Outcome", "PnL_Pips"]:
+            if col not in df.columns:
+                df[col] = None
+        return df
+
+    def _build_backtest_arrays(self, df: pd.DataFrame):
+        return (
+            df["high"].to_numpy(),
+            df["low"].to_numpy(),
+            df["close"].to_numpy(),
+            df["SL"].to_numpy(),
+            df["TP"].to_numpy(),
+            df["Entry"].to_numpy(),
+            np.flatnonzero(df["Entry"].isin(["Buy", "Sell"]).to_numpy()),
+        )
+
+    def _process_backtest_position(
+        self,
+        tf: str,
+        df: pd.DataFrame,
+        pos: int,
+        entry_type: str,
+        sl: float,
+        tp: float,
+        close: np.ndarray,
+        high: np.ndarray,
+        low: np.ndarray,
+        current: datetime | None,
+        cooldown: timedelta,
+    ) -> tuple[dict | None, datetime | None]:
+        if entry_type not in ("Buy", "Sell") or pd.isna(sl) or pd.isna(tp):
+            return None, current
+
+        timestamp = pd.to_datetime(df.index[pos], errors="coerce")
+        if pd.isna(timestamp):
+            return None, current
+
+        cooldown_violation, current = self._is_within_cooldown(current, timestamp, cooldown)
+        if cooldown_violation:
+            return None, current
+
+        entry_price = close[pos]
+        outcome, exit_price, exit_index = self._evaluate_trade_outcome_fast(
+            high=high,
+            low=low,
+            entry_pos=pos,
+            entry_type=entry_type,
+            entry_price=entry_price,
+            sl=sl,
+            tp=tp,
+        )
+
+        pnl_pips = 0
+        if exit_price is not None:
+            pnl_pips = (
+                (exit_price - entry_price) / self.pip_size
+                if entry_type == "Buy"
+                else (entry_price - exit_price) / self.pip_size
+            )
+
+        trade = {
+            "TF": tf,
+            "Index": df.index[pos],
+            "Type": entry_type,
+            "EntryPrice": entry_price,
+            "SL": sl,
+            "TP": tp,
+            "ExitPrice": exit_price,
+            "Outcome": outcome,
+            "ExitIndex": exit_index,
+            "PnL_Pips": pnl_pips,
+        }
+        return trade, current
+
+    def _process_backtest_entries(
+        self,
+        tf: str,
+        df: pd.DataFrame,
+        entry_positions: np.ndarray,
+        entry_type_arr: np.ndarray,
+        sl_arr: np.ndarray,
+        tp_arr: np.ndarray,
+        high: np.ndarray,
+        low: np.ndarray,
+        close: np.ndarray,
+        col_exit_price: int,
+        col_exit_index: int,
+        col_outcome: int,
+        col_pnl: int,
+    ) -> tuple[list, datetime | None]:
+        """Process all entry positions and record trades."""
+        trades = []
+        current: datetime | None = None
+        cooldown = timedelta(hours=1)
+
+        for pos in entry_positions:
+            entry_type = entry_type_arr[pos]
+            if entry_type not in ("Buy", "Sell"):
+                continue
+
+            sl = sl_arr[pos]
+            tp = tp_arr[pos]
+            if pd.isna(sl) or pd.isna(tp):
+                continue
+
+            timestamp = pd.to_datetime(df.index[pos], errors="coerce")
+            if pd.isna(timestamp):
+                continue
+
+            cooldown_violation, current = self._is_within_cooldown(current, timestamp, cooldown)
+            if cooldown_violation:
+                continue
+
+            entry_price = close[pos]
+            outcome, exit_price, exit_index = self._evaluate_trade_outcome_fast(
+                high=high,
+                low=low,
+                close=close,
+                entry_pos=pos,
+                entry_type=entry_type,
+                entry_price=entry_price,
+                sl=sl,
+                tp=tp,
+            )
+
+            pnl_pips = self._calculate_pnl_pips(entry_type, entry_price, exit_price)
+
+            df.iat[pos, col_exit_price] = exit_price
+            df.iat[pos, col_exit_index] = exit_index
+            df.iat[pos, col_outcome] = outcome
+            df.iat[pos, col_pnl] = pnl_pips
+
+            trades.append({
+                "TF": tf,
+                "Index": df.index[pos],
+                "Type": entry_type,
+                "EntryPrice": entry_price,
+                "SL": sl,
+                "TP": tp,
+                "ExitPrice": exit_price,
+                "Outcome": outcome,
+                "ExitIndex": exit_index,
+                "PnL_Pips": pnl_pips,
+            })
+
+        return trades, current
+
+    def _calculate_pnl_pips(self, entry_type: str, entry_price: float, exit_price: float | None) -> float:
+        """Calculate PnL in pips."""
+        if exit_price is None:
+            return 0
+        return (
+            (exit_price - entry_price) / self.pip_size
+            if entry_type == "Buy"
+            else (entry_price - exit_price) / self.pip_size
+        )
+
     def backtest_entries(self, tf, df: pd.DataFrame) -> dict | None:
         """
         Backtest entries for each timeframe and update the
@@ -739,10 +900,6 @@ class MovingAverageCrossover:
             if col not in df.columns:
                 df[col] = None
 
-        trades = []
-        current: datetime | None = None
-        cooldown = timedelta(hours=1)
-
         entry_series = df["Entry"]
         entry_mask = entry_series.isin(["Buy", "Sell"])
         entry_positions = np.flatnonzero(entry_mask.to_numpy())
@@ -759,62 +916,21 @@ class MovingAverageCrossover:
         col_outcome = df.columns.get_loc("Outcome")
         col_pnl = df.columns.get_loc("PnL_Pips")
 
-        for pos in entry_positions:
-            entry_type = entry_type_arr[pos]
-            if entry_type not in ("Buy", "Sell"):
-                continue
-
-            sl = sl_arr[pos]
-            tp = tp_arr[pos]
-            if pd.isna(sl) or pd.isna(tp):
-                continue
-
-            timestamp = pd.to_datetime(df.index[pos], errors="coerce")
-            if pd.isna(timestamp):
-                continue
-
-            cooldown_violation, current = self._is_within_cooldown(current, timestamp, cooldown)
-            if cooldown_violation:
-                continue
-
-            entry_price = close[pos]
-            outcome, exit_price, exit_index = self._evaluate_trade_outcome_fast(
-                high=high,
-                low=low,
-                entry_pos=pos,
-                entry_type=entry_type,
-                entry_price=entry_price,
-                sl=sl,
-                tp=tp,
-            )
-
-            pnl_pips = 0
-            if exit_price is not None:
-                pnl_pips = (
-                    (exit_price - entry_price) / self.pip_size
-                    if entry_type == "Buy"
-                    else (entry_price - exit_price) / self.pip_size
-                )
-
-            df.iat[pos, col_exit_price] = exit_price
-            df.iat[pos, col_exit_index] = exit_index
-            df.iat[pos, col_outcome] = outcome
-            df.iat[pos, col_pnl] = pnl_pips
-
-            trades.append(
-                {
-                    "TF": tf,
-                    "Index": df.index[pos],
-                    "Type": entry_type,
-                    "EntryPrice": entry_price,
-                    "SL": sl,
-                    "TP": tp,
-                    "ExitPrice": exit_price,
-                    "Outcome": outcome,
-                    "ExitIndex": exit_index,
-                    "PnL_Pips": pnl_pips,
-                }
-            )
+        trades, _ = self._process_backtest_entries(
+            tf=tf,
+            df=df,
+            entry_positions=entry_positions,
+            entry_type_arr=entry_type_arr,
+            sl_arr=sl_arr,
+            tp_arr=tp_arr,
+            high=high,
+            low=low,
+            close=close,
+            col_exit_price=col_exit_price,
+            col_exit_index=col_exit_index,
+            col_outcome=col_outcome,
+            col_pnl=col_pnl,
+        )
 
         if trades:
             self.data_handler.data[tf] = df
