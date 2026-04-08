@@ -140,6 +140,22 @@ class MovingAverageCrossover:
         if timestamps:
             self.all_timestamps.update(timestamps)
 
+    def _normalize_timestamp(self, ts):
+        """Coerce mixed timestamp types into pandas Timestamp."""
+        if isinstance(ts, pd.Timestamp):
+            return ts
+        if isinstance(ts, datetime):
+            return pd.Timestamp(ts)
+        if isinstance(ts, np.datetime64):
+            return pd.Timestamp(ts)
+        if isinstance(ts, (int, float, np.integer, np.floating)):
+            try:
+                unit = "ms" if ts > 1e12 else "s"
+                return pd.to_datetime(ts, unit=unit, errors="coerce")
+            except Exception:
+                return pd.NaT
+        return pd.to_datetime(ts, errors="coerce")
+
     def _build_snapshot(self, ts: dict):
         """Build multi-timeframe snapshot for a given timestamp."""
         def get_tf_snap(tf, df: pd.DataFrame) -> dict:
@@ -221,6 +237,47 @@ class MovingAverageCrossover:
         # If never hit SL/TP — optional behavior
         return "NoHit", entry_price, None
 
+    def _evaluate_trade_outcome_fast(self, high, low, entry_pos, entry_type, entry_price, sl, tp):
+        """
+        Fast, vectorized outcome scan using numpy arrays.
+        Preserves original SL-first priority when both hit in the same candle.
+        Returns (Outcome, ExitPrice, ExitIndex)
+        """
+        future_high = high[entry_pos + 1:]
+        future_low = low[entry_pos + 1:]
+
+        if entry_type == "Buy":
+            sl_hits = np.flatnonzero(future_low <= sl)
+            tp_hits = np.flatnonzero(future_high >= tp)
+            sl_idx = sl_hits[0] if sl_hits.size else None
+            tp_idx = tp_hits[0] if tp_hits.size else None
+
+            if sl_idx is None and tp_idx is None:
+                return "NoHit", entry_price, None
+            if sl_idx is None:
+                return "Profit", tp, entry_pos + 1 + tp_idx
+            if tp_idx is None:
+                return "Loss", sl, entry_pos + 1 + sl_idx
+            if tp_idx < sl_idx:
+                return "Profit", tp, entry_pos + 1 + tp_idx
+            return "Loss", sl, entry_pos + 1 + sl_idx
+
+        # SELL: SL/TP reversed
+        sl_hits = np.flatnonzero(future_high >= sl)
+        tp_hits = np.flatnonzero(future_low <= tp)
+        sl_idx = sl_hits[0] if sl_hits.size else None
+        tp_idx = tp_hits[0] if tp_hits.size else None
+
+        if sl_idx is None and tp_idx is None:
+            return "NoHit", entry_price, None
+        if sl_idx is None:
+            return "Profit", tp, entry_pos + 1 + tp_idx
+        if tp_idx is None:
+            return "Loss", sl, entry_pos + 1 + sl_idx
+        if tp_idx < sl_idx:
+            return "Profit", tp, entry_pos + 1 + tp_idx
+        return "Loss", sl, entry_pos + 1 + sl_idx
+
     def _apply_precision(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Normalize all price-related columns to match pip precision.
@@ -245,48 +302,31 @@ class MovingAverageCrossover:
     # ------------------------------------------------------
     # 1) Moving Average Values (per timeframe)
     # ------------------------------------------------------
-    def calculate_moving_averages_data(self, tf, df):
-        """
-        Calculate Fast/Slow MA and derived columns per timeframe.
-        - Validates 'close' column
-        - Ensures datetime index
-        - Keeps frames even if some rows are NaN (avoid aggressive dropna)
-        """
-        # Skip non-dataframes & placeholder keys
-        if df is None or not isinstance(df, pd.DataFrame):
-            logger.warning(f"{self.symbol_name} {tf} is None or not a DataFrame, instance == {type(df)}")
-            return
-
-        df = df.copy()
-
-        # Force datetime index
-        if not isinstance(df.index, pd.DatetimeIndex):
-            try:
-                if 'time' in df.columns:
-                    if pd.api.types.is_numeric_dtype(df['time']):
-                        df['time'] = pd.to_datetime(df['time'], unit='s', errors='coerce')
-                    else:
-                        df['time'] = pd.to_datetime(df['time'], errors='coerce')
-                    df.set_index('time', inplace=True)
-                else:
-                    df.index = pd.to_datetime(df.index, errors='coerce')
-
-                df = df[~df.index.isna()]
-                df.sort_index(inplace=True)
-
-            except Exception:
-                logger.warning(f"{self.symbol_name} {tf}: Failed to normalize datetime index")
-        else:
+    def _normalize_datetime_index(self, df: pd.DataFrame, tf: str) -> pd.DataFrame:
+        """Normalize DataFrame index to DatetimeIndex."""
+        if isinstance(df.index, pd.DatetimeIndex):
             logger.info(f"{self.symbol_name} {tf}: Datetime index verified.")
+            return df
 
-        # Compute MAs — shift by 1 to avoid lookahead
-        df = df.copy()
-        self._refresh_pip_size(df)
-        meta = self.client.TF_dict[tf]
-        threshold = meta.get("prox_limit", 300) * self.pip_size
         try:
-            # Vectorized calculation and safe fill
-            logger.info(f"Calculating MAs for {self.symbol_name} {tf} with threshold {threshold}")
+            if 'time' in df.columns:
+                if pd.api.types.is_numeric_dtype(df['time']):
+                    df['time'] = pd.to_datetime(df['time'], unit='s', errors='coerce')
+                else:
+                    df['time'] = pd.to_datetime(df['time'], errors='coerce')
+                df.set_index('time', inplace=True)
+            else:
+                df.index = pd.to_datetime(df.index, errors='coerce')
+
+            df = df[~df.index.isna()]
+            df.sort_index(inplace=True)
+        except Exception:
+            logger.warning(f"{self.symbol_name} {tf}: Failed to normalize datetime index")
+        return df
+
+    def _calculate_ma_indicators(self, df: pd.DataFrame, tf: str, threshold: float) -> pd.DataFrame:
+        """Calculate Fast MA, Slow MA, Bias, and Proximity indicators."""
+        try:
             logger.info(f"Calculating MAs for {self.symbol_name} {tf} with threshold {threshold}")
             df.loc[:, 'Fast_MA'] = df['close'].rolling(window=self.fast_period, min_periods=1).mean().shift(1)
             df.loc[:, 'Slow_MA'] = df['close'].rolling(window=self.slow_period, min_periods=1).mean().shift(1)
@@ -294,12 +334,52 @@ class MovingAverageCrossover:
             df.loc[:, 'Proximity'] = (df['close'] - df['Slow_MA']).abs() <= threshold
         except Exception as e:
             logger.exception(f"exception in proximity calculation for {self.symbol_name} {tf}: {e}")
+        return df
+
+    def calculate_moving_averages_data(self, tf, df):
+        """
+        Calculate Fast/Slow MA and derived columns per timeframe.
+        - Validates 'close' column
+        - Ensures datetime index
+        - Keeps frames even if some rows are NaN (avoid aggressive dropna)
+        """
+        logger.info("[%s][%s] MA calc start", self.symbol_name, tf)
+        # Skip non-dataframes & placeholder keys
+        if df is None or not isinstance(df, pd.DataFrame):
+            logger.warning(f"{self.symbol_name} {tf} is None or not a DataFrame, instance == {type(df)}")
+            return
+
+        df = df.copy()
+        df = self._normalize_datetime_index(df, tf)
+
+        self._refresh_pip_size(df)
+        meta = self.client.TF_dict[tf]
+        threshold = meta.get("prox_limit", 300) * self.pip_size
+
+        df = self._calculate_ma_indicators(df, tf, threshold)
         df = self._apply_precision(df)
+
         if self.verify_fields(tf, df):
             self.data_handler.update_timestamps(df.index)
         else:
             logger.warning(f"{self.symbol_name} {tf} failed field verification.")
-        df.dropna(subset=['close'], inplace=True)  # Ensure 'close' is valid for downstream logic
+
+        df.dropna(subset=['close'], inplace=True)
+
+        try:
+            if isinstance(df.index, pd.DatetimeIndex) and not df.empty:
+                logger.info(
+                    "[%s][%s] MA calc done rows=%d range=%s..%s",
+                    self.symbol_name,
+                    tf,
+                    len(df),
+                    df.index.min(),
+                    df.index.max(),
+                )
+            else:
+                logger.info("[%s][%s] MA calc done rows=%d", self.symbol_name, tf, len(df))
+        except Exception:
+            logger.info("[%s][%s] MA calc done", self.symbol_name, tf)
         return df
 
     # ------------------------------------------------------
@@ -391,6 +471,61 @@ class MovingAverageCrossover:
     # ------------------------------------------------------
     # 5) sequence proximity entries for lower timeframes
     # ------------------------------------------------------
+    def _get_valid_timeframes(self) -> list:
+        """Extract and validate timeframes for MTF alignment."""
+        tfs = []
+        for tf, df in list(self.data_handler.data.items()):
+            if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+                continue
+            if not all(col in df.columns for col in ["Fast_MA", "Slow_MA", "Proximity"]):
+                continue
+            if not isinstance(df.index, pd.DatetimeIndex):
+                continue
+            tfs.append(tf)
+        return tfs
+
+    def _compute_trend_metrics(self, base: pd.DataFrame, tfs: list) -> tuple:
+        """Compute count and proximity metrics for all timeframes."""
+        count = pd.Series(0, index=base.index, dtype="int")
+        prox_true = pd.Series(0, index=base.index, dtype="int")
+
+        for tf in tfs:
+            df = self.data_handler.data[tf]
+            aligned = df.reindex(base.index)
+            fast = aligned["Fast_MA"]
+            slow = aligned["Slow_MA"]
+            prox = aligned["Proximity"]
+
+            valid = fast.notna() & slow.notna()
+            sign = pd.Series(0, index=base.index, dtype="int")
+            sign[valid] = (fast[valid] > slow[valid]).astype(int) * 2 - 1
+            count = count.add(sign, fill_value=0).astype(int)
+
+            prox_true = prox_true.add((valid & prox.astype(bool)).astype(int), fill_value=0).astype(int)
+
+        return count, prox_true
+
+    def _classify_trends_vectorized(self, count: pd.Series, prox_true: pd.Series, ls_len: int, majority: int) -> np.ndarray:
+        """Vectorized trend classification based on count and proximity."""
+        strong_threshold = max(3, ls_len - 1)
+        strong_bull = (count >= (ls_len - 2)) & (prox_true >= strong_threshold)
+        strong_bear = (count <= -(ls_len - 2)) & (prox_true >= strong_threshold)
+        bull = (count >= 5) & (prox_true >= 5)
+        bear = (count <= -5) & (prox_true >= 5)
+
+        main_trend = np.select(
+            [
+                count >= majority,
+                count <= -majority,
+            ],
+            [
+                np.select([strong_bull, bull], ["(S)Bullish", "Bullish"], default="(W)Bullish"),
+                np.select([strong_bear, bear], ["(S)Bearish", "Bearish"], default="(W)Bearish"),
+            ],
+            default="Neutral",
+        )
+        return main_trend
+
     def sequence_Trend_Data(self):
         """
         Timestamp-aligned multi-timeframe trend evaluation.
@@ -406,29 +541,45 @@ class MovingAverageCrossover:
                 logger.warning(f"{self.symbol_name}: No timestamps found for MTF alignment.")
                 return
 
-            common_ts = sorted(self.data_handler.all_timestamps)
+            normalized = []
+            for ts in self.data_handler.all_timestamps:
+                ts_norm = self._normalize_timestamp(ts)
+                if pd.isna(ts_norm):
+                    continue
+                normalized.append(ts_norm)
+            self.data_handler.all_timestamps = set(normalized)
+
+            common_ts = sorted(self.data_handler.all_timestamps, key=self._normalize_timestamp)
             if not common_ts:
                 logger.warning(f"{self.symbol_name}: No common timestamps found for MTF alignment.")
                 return
+            logger.info("[%s] MTF alignment timestamps=%d", self.symbol_name, len(common_ts))
 
-            ts_futures = {}
-            for ts in common_ts:
-                stamp = str(ts)
-                ts_futures[self.executor.submit(
-                    self._build_snapshot,
-                    ts
-                )] = stamp
+            tfs = self._get_valid_timeframes()
+            if not tfs:
+                logger.warning("%s: No valid timeframes found for MTF alignment.", self.symbol_name)
+                return
 
-            for f in as_completed(ts_futures):
-                stamp = ts_futures[f]
-                mtf_snapshot = f.result()
-                if not mtf_snapshot:
+            ls_len = len(tfs)
+            majority = ls_len // 2 + 1
+
+            for ltf in ["15M", "30M"]:
+                base = self.data_handler.data.get(ltf)
+                if base is None or not isinstance(base, pd.DataFrame) or base.empty:
+                    continue
+                if not isinstance(base.index, pd.DatetimeIndex):
                     continue
 
-                main_trend = self.identify_Trend_Alignment(mtf_snapshot)
-                self._write_main_trend_to_ltf(ts, main_trend)
+                base = base.copy()
+                base.sort_index(inplace=True)
 
-            logger.info(f"✔ Timestamp-aligned MTF Main_Trend computed for {self.symbol_name}")
+                count, prox_true = self._compute_trend_metrics(base, tfs)
+                main_trend = self._classify_trends_vectorized(count, prox_true, ls_len, majority)
+
+                base.loc[base.index, "Bias"] = main_trend
+                self.data_handler.data[ltf] = base
+
+            logger.info("[%s] MTF alignment complete", self.symbol_name)
 
         except Exception as e:
             logger.exception(f"Exception in timestamp-based sequence_data: {e}")
@@ -454,47 +605,45 @@ class MovingAverageCrossover:
         copyDF["SL"] = np.nan
         copyDF["TP"] = np.nan
         logger.info(f"Identifying proximity entries for {self.symbol_name} {tf} with pip size {self.pip_size} and pip distance {self.pip_distance}")
-        for i, row in copyDF.iterrows():
 
-            entry_price = row['close']
-            bias = copyDF.loc[i, "Bias"]
+        bias = copyDF["Bias"].astype(str)
+        prox = copyDF["Proximity"].astype(bool)
+        weak = bias.str.contains(r"\(W\)")
+        strong = bias.str.contains(r"\(S\)")
+        bullish = bias.str.contains("Bullish")
+        bearish = bias.str.contains("Bearish")
 
-            if not row['Proximity']:
-                continue
+        mask_buy = prox & bullish & ~weak
+        mask_sell = prox & bearish & ~weak
+        mask_buy_strong = mask_buy & strong
+        mask_buy_norm = mask_buy & ~strong
+        mask_sell_strong = mask_sell & strong
+        mask_sell_norm = mask_sell & ~strong
 
-            if "(W)" in bias:
-                continue
-            # BUY
-            if "Bullish" in bias:
-                if "(S)" in bias:
-                    # stronger MA confluence == higher risk higher reward entry
-                    copyDF.loc[i, 'Entry'] = "Buy"
-                    copyDF.loc[i, 'SL'] = entry_price - (2 * self.pip_distance * (self.pip_size * 3))
-                    copyDF.loc[i, 'TP'] = entry_price + (3 * self.pip_distance * (self.pip_size * 3))
-                else:
-                    # normal confluence == normal entry
-                    copyDF.loc[i, 'Entry'] = "Buy"
-                    copyDF.loc[i, 'SL'] = entry_price - (self.pip_distance * self.pip_size)
-                    copyDF.loc[i, 'TP'] = entry_price + (3 * self.pip_distance * self.pip_size)
-            # SELL
-            elif "Bearish" in bias:
-                if "(S)" in bias:
-                    # stronger MA confluence == higher risk higher reward entry
-                    copyDF.loc[i, 'Entry'] = "Sell"
-                    copyDF.loc[i, 'SL'] = entry_price + (2 * self.pip_distance * (self.pip_size * 3))
-                    copyDF.loc[i, 'TP'] = entry_price - (3 * self.pip_distance * (self.pip_size * 3))
-                else:
-                    # normal confluence == normal entry
-                    copyDF.loc[i, 'Entry'] = "Sell"
-                    copyDF.loc[i, 'SL'] = entry_price + (self.pip_distance * self.pip_size)
-                    copyDF.loc[i, 'TP'] = entry_price - (3 * self.pip_distance * self.pip_size)
-            else:
-                continue
+        entry_price = copyDF["close"]
+
+        copyDF.loc[mask_buy_strong, "Entry"] = "Buy"
+        copyDF.loc[mask_buy_strong, "SL"] = entry_price[mask_buy_strong] - (2 * self.pip_distance * (self.pip_size * 3))
+        copyDF.loc[mask_buy_strong, "TP"] = entry_price[mask_buy_strong] + (3 * self.pip_distance * (self.pip_size * 3))
+
+        copyDF.loc[mask_buy_norm, "Entry"] = "Buy"
+        copyDF.loc[mask_buy_norm, "SL"] = entry_price[mask_buy_norm] - (self.pip_distance * self.pip_size)
+        copyDF.loc[mask_buy_norm, "TP"] = entry_price[mask_buy_norm] + (3 * self.pip_distance * self.pip_size)
+
+        copyDF.loc[mask_sell_strong, "Entry"] = "Sell"
+        copyDF.loc[mask_sell_strong, "SL"] = entry_price[mask_sell_strong] + (2 * self.pip_distance * (self.pip_size * 3))
+        copyDF.loc[mask_sell_strong, "TP"] = entry_price[mask_sell_strong] - (3 * self.pip_distance * (self.pip_size * 3))
+
+        copyDF.loc[mask_sell_norm, "Entry"] = "Sell"
+        copyDF.loc[mask_sell_norm, "SL"] = entry_price[mask_sell_norm] + (self.pip_distance * self.pip_size)
+        copyDF.loc[mask_sell_norm, "TP"] = entry_price[mask_sell_norm] - (3 * self.pip_distance * self.pip_size)
+
+        entries = copyDF["Entry"].notna().sum()
         df = copyDF
 
         self.backtest_entries(tf, df)
 
-        logger.info(f"Proximity entries generated for timeframe ({tf})")
+        logger.info(f"Proximity entries generated for timeframe ({tf}) entries={entries}")
         return df
 
     # ------------------------------------------------------
@@ -594,12 +743,33 @@ class MovingAverageCrossover:
         current: datetime | None = None
         cooldown = timedelta(hours=1)
 
-        for pos, (idx, row) in enumerate(df.iterrows()):
-            entry_type = row["Entry"]
+        entry_series = df["Entry"]
+        entry_mask = entry_series.isin(["Buy", "Sell"])
+        entry_positions = np.flatnonzero(entry_mask.to_numpy())
+
+        high = df["high"].to_numpy()
+        low = df["low"].to_numpy()
+        close = df["close"].to_numpy()
+        sl_arr = df["SL"].to_numpy()
+        tp_arr = df["TP"].to_numpy()
+        entry_type_arr = entry_series.to_numpy()
+
+        col_exit_price = df.columns.get_loc("ExitPrice")
+        col_exit_index = df.columns.get_loc("ExitIndex")
+        col_outcome = df.columns.get_loc("Outcome")
+        col_pnl = df.columns.get_loc("PnL_Pips")
+
+        for pos in entry_positions:
+            entry_type = entry_type_arr[pos]
             if entry_type not in ("Buy", "Sell"):
                 continue
 
-            timestamp = pd.to_datetime(idx, errors="coerce")
+            sl = sl_arr[pos]
+            tp = tp_arr[pos]
+            if pd.isna(sl) or pd.isna(tp):
+                continue
+
+            timestamp = pd.to_datetime(df.index[pos], errors="coerce")
             if pd.isna(timestamp):
                 continue
 
@@ -607,19 +777,44 @@ class MovingAverageCrossover:
             if cooldown_violation:
                 continue
 
-            trade = self._record_backtest_trade(
-                tf=tf,
-                df=df,
-                idx=idx,
-                pos=pos,
-                row=row,
+            entry_price = close[pos]
+            outcome, exit_price, exit_index = self._evaluate_trade_outcome_fast(
+                high=high,
+                low=low,
+                entry_pos=pos,
                 entry_type=entry_type,
-                entry_price=row["close"],
-                sl=row["SL"],
-                tp=row["TP"],
+                entry_price=entry_price,
+                sl=sl,
+                tp=tp,
             )
-            if trade is not None:
-                trades.append(trade)
+
+            pnl_pips = 0
+            if exit_price is not None:
+                pnl_pips = (
+                    (exit_price - entry_price) / self.pip_size
+                    if entry_type == "Buy"
+                    else (entry_price - exit_price) / self.pip_size
+                )
+
+            df.iat[pos, col_exit_price] = exit_price
+            df.iat[pos, col_exit_index] = exit_index
+            df.iat[pos, col_outcome] = outcome
+            df.iat[pos, col_pnl] = pnl_pips
+
+            trades.append(
+                {
+                    "TF": tf,
+                    "Index": df.index[pos],
+                    "Type": entry_type,
+                    "EntryPrice": entry_price,
+                    "SL": sl,
+                    "TP": tp,
+                    "ExitPrice": exit_price,
+                    "Outcome": outcome,
+                    "ExitIndex": exit_index,
+                    "PnL_Pips": pnl_pips,
+                }
+            )
 
         if trades:
             self.data_handler.data[tf] = df
@@ -631,6 +826,8 @@ class MovingAverageCrossover:
             logger.info(
                 f"[{self.symbol_name}][{tf}] Backtest complete - {len(all_trades[tf])} trades updated."
             )
+        else:
+            logger.info(f"[{self.symbol_name}][{tf}] Backtest complete - 0 trades.")
 
         return all_trades
 
@@ -774,6 +971,7 @@ class MovingAverageCrossover:
 
     def backtest_entries_data(self):
         # --- STEP 3: entry detection ---
+        logger.info("[%s] Backtest entry generation start", self.symbol_name)
         entry_futures = {
             self.executor.submit(self.identify_proximity_entries, df, tf): tf
             for tf, df in self.data_handler.data.items()
@@ -793,6 +991,7 @@ class MovingAverageCrossover:
             except Exception as e:
                 logger.exception("Backtest entry generation failed for %s: %s", tf, e)
 
+        logger.info("[%s] Backtest entry generation done summaries=%d", self.symbol_name, len(summaries))
         return summaries
 
     def run(self) -> dict | None:
@@ -802,6 +1001,7 @@ class MovingAverageCrossover:
         """
         # --- STEP 1: MA calculation (parallel, no early return) ---
         logger.info(f"calculating moving averages for {self.symbol_name} across all timeframes.")
+        logger.info("[%s] Timeframes available=%d", self.symbol_name, len(self.data_handler.data))
         futures = {
             self.executor.submit(self.calculate_moving_averages_data, tf, df): tf
             for tf, df in self.data_handler.data.items()
@@ -811,6 +1011,7 @@ class MovingAverageCrossover:
         for f in as_completed(futures):
             tf = futures[f]
             self.data_handler.data[tf] = f.result()
+        logger.info("[%s] MA calc complete across all timeframes", self.symbol_name)
 
         if self.backtest:
             # --- STEP 2: sequence synthesis ---
@@ -819,6 +1020,7 @@ class MovingAverageCrossover:
             self.results = self.backtest_entries_data()
             key = self.symbol_name + "_backtest_summary"
             self.cache.set(key, self.results)
+            logger.info("[%s] Backtest run complete", self.symbol_name)
             return None
 
         frame = None

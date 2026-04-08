@@ -2,14 +2,15 @@ import asyncio
 from typing import Callable
 
 from advisor.Client.mt5Client import MetaTrader5Client
-from Strategy_model.indicators.MA.MovingAverage import MovingAverageCrossover
+from advisor.Strategy_model.indicators.MA.MovingAverage import MovingAverageCrossover
 from advisor.utils.dataHandler import CacheManager
 from advisor.backtest.metrics import metrics
 from advisor.Client.symbols.symbol_watch import SymbolWatch
-from advisor.core.state import Strategy, SymbolState
+from advisor.core.state import Strategy, SymbolState, symbolCycle
 from advisor.utils.logging_setup import get_logger
 
 logger = get_logger(__name__)
+logger.info("Loaded Backtest module from %s", __file__)
 
 class Backtest:
     """
@@ -57,7 +58,7 @@ class Backtest:
             return False
 
         produced = False
-        sym.state.value = 3
+        sym.state = symbolCycle.BACKTESTING
         
         for strat in sym.strategies:
             try:
@@ -85,7 +86,7 @@ class Backtest:
 
         if on_complete:
             on_complete(symbol, produced)
-        sym.state.value = 4
+        sym.state = symbolCycle.READY
         return produced
 
     # -------------------------------------------------
@@ -127,6 +128,7 @@ class Backtest:
 
     def _ensure_strategy(self, sym: SymbolState):
         name = f"{sym.symbol}_EMA"
+        logger.info("Ensure strategy invoked for %s", sym.symbol)
 
         if not isinstance(getattr(sym, "strategies", None), list):
             existing = getattr(sym, "strategies", None)
@@ -135,7 +137,7 @@ class Backtest:
         if any(s.strategy_name == name for s in sym.strategies):
             logger.info("Strategy already attached for %s (strategies=%d)", sym.symbol, len(sym.strategies))
             return
-        sym.state.value = 2
+        sym.state = symbolCycle.INITIALIZING
         logger.info("Attaching strategy for %s (strategies=%d)", sym.symbol, len(sym.strategies))
         try:
             strategy = MovingAverageCrossover(

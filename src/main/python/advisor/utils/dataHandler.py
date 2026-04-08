@@ -4,6 +4,7 @@ import csv
 import json
 import threading
 import time
+import numbers
 import matplotlib.pyplot as plt
 
 from advisor.utils.cache_handler import CacheManager
@@ -99,12 +100,12 @@ class DataHandler:
 
             if existing is None:
                 self.data[tf] = self._trim(df)
-                self.all_timestamps.update(df.index)
+                self.all_timestamps.update(self._normalize_timestamps(df.index))
                 return
 
             new_rows = df.loc[~df.index.isin(existing.index)]
 
-            self.all_timestamps.update(df.index)
+            self.all_timestamps.update(self._normalize_timestamps(df.index))
 
             if new_rows.empty:
                 return
@@ -114,7 +115,7 @@ class DataHandler:
 
             self.data[tf] = self._trim(combined)
 
-            self.all_timestamps.update(new_rows.index)
+            self.all_timestamps.update(self._normalize_timestamps(new_rows.index))
 
     def set_data(self, data: dict):
         for tf, df in data.items():
@@ -172,6 +173,40 @@ class DataHandler:
     def get_all(self) -> Dict[str, pd.DataFrame]:
         return self.data
 
+    def _normalize_timestamp(self, ts):
+        if ts is None or (isinstance(ts, float) and pd.isna(ts)):
+            return None
+        if isinstance(ts, pd.Timestamp):
+            return ts
+        if isinstance(ts, (datetime.datetime, datetime.date)):
+            return pd.Timestamp(ts)
+        if isinstance(ts, numbers.Real):
+            try:
+                unit = "ms" if abs(ts) > 1e12 else "s"
+                return pd.to_datetime(ts, unit=unit, errors="coerce")
+            except Exception:
+                return None
+        try:
+            normalized = pd.to_datetime(ts, errors="coerce")
+            return normalized if not pd.isna(normalized) else None
+        except Exception:
+            return None
+
+    def _normalize_timestamps(self, timestamps):
+        if timestamps is None:
+            return []
+        if isinstance(timestamps, pd.DataFrame):
+            timestamps = timestamps.index
+        if isinstance(timestamps, pd.Index):
+            timestamps = list(timestamps)
+
+        normalized = []
+        for ts in timestamps:
+            ts_norm = self._normalize_timestamp(ts)
+            if ts_norm is not None:
+                normalized.append(ts_norm)
+        return normalized
+
     def update_timestamps(self, timestamps):
         """
         Accepts:
@@ -183,22 +218,15 @@ class DataHandler:
             return
 
         try:
-            # If full DataFrame passed
-            if isinstance(timestamps, pd.DataFrame):
-                if timestamps.empty:
-                    return
-                timestamps = timestamps.index
-
-            # Now treat as iterable
-            self.all_timestamps.update(timestamps)
-
+            self.all_timestamps.update(self._normalize_timestamps(timestamps))
             logger.info(f"Timestamps updated: total={len(self.all_timestamps)}")
 
         except Exception as e:
             logger.exception(f"Failed updating timestamps: {e}")
 
     def get_all_timestamps(self) -> set:
-        return sorted(self.all_timestamps) if self.all_timestamps else None
+        normalized = self._normalize_timestamps(self.all_timestamps)
+        return sorted(set(normalized)) if normalized else None
 
     def snapshot(self, timestamp):
         """Return multi-TF snapshot at timestamp"""

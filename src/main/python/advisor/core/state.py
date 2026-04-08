@@ -151,7 +151,7 @@ class StateManager:
     def set_symbol_state(self, name, new_state: symbolCycle):
         for sym in self.bot.symbols:
             if sym.symbol == name:
-                sym.state.value = new_state.value
+                sym.state = new_state
                 break
 
     @property
