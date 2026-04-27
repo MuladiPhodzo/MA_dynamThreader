@@ -14,7 +14,7 @@ class StateStore:
 
     def __init__(self):
         self.state = self._load()
-    
+
     @staticmethod
     def _load() -> dict:
         with STATE_LOCK:
@@ -37,7 +37,8 @@ class StateStore:
                 logger.exception("Failed to load state file: %s", e)
                 return {}
 
-    def _write_default(self):
+    @staticmethod
+    def _write_default():
         try:
             with open(STATE_FILE, "w", encoding="utf-8") as f:
                 json.dump({}, f)

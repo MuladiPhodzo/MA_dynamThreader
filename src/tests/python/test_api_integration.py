@@ -61,6 +61,14 @@ class DummyHealthBus:
         return {}
 
 
+class DummyEventBus:
+    def __init__(self):
+        self.emitted = []
+
+    def emit(self, event_type: str, payload=None):
+        self.emitted.append((event_type, payload))
+
+
 @dataclass
 class DummyStateManager:
     bot: BotState
@@ -136,6 +144,34 @@ def test_toggle_symbol_and_reload_config(tmp_path, monkeypatch):
     assert res.status_code == 200
     assert symbol_watch.refreshed is True
     assert state_manager.bot.symbols
+
+
+def test_create_strategy_emits_top20_backtest_event(tmp_path, monkeypatch):
+    ctx, _symbol_watch, _state = _make_ctx(tmp_path)
+    ctx.event_bus = DummyEventBus()
+    monkeypatch.setattr(api_server, "_project_root", lambda: tmp_path)
+
+    app = api_server.create_app(ctx)
+    client = TestClient(app)
+
+    res = client.post(
+        "/strategy/create",
+        json={
+            "name": "BreakoutFlow",
+            "config": {"rules": {"min_score": 0.72}},
+        },
+    )
+
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["backtest_event"] == f"{api_server.events.RUN_BACKTEST}:BreakoutFlow"
+    assert payload["backtest_emitted"] is True
+    assert any(
+        event_type == f"{api_server.events.RUN_BACKTEST}:BreakoutFlow"
+        and event_payload["strategy_name"] == "BreakoutFlow"
+        and event_payload["top_n"] == 20
+        for event_type, event_payload in ctx.event_bus.emitted
+    )
 
 
 def test_run_backtest_support_and_history(tmp_path, monkeypatch):

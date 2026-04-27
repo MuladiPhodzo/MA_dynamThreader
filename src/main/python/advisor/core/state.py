@@ -32,6 +32,13 @@ class symbolCycle(Enum):
     READY = 4
     DEGRADED = 5
 
+class StrategyCycle(Enum):
+    INITIALIZED = 1
+    BACKTESTING = 2
+    PASSED = 3
+    FAILED = 4
+    LIVE = 5
+
 # =========================================================
 # DATA STRUCTURES
 # =========================================================
@@ -39,14 +46,8 @@ class symbolCycle(Enum):
 class Strategy:
     strategy_name: str
     strategy: Callable = None
+    state: StrategyCycle = StrategyCycle.INITIALIZED
     strategy_score: float = 0.0
-
-
-@dataclass
-class symbolStrategy:
-    EMA: Any = None
-    Volume: Any = None
-
 
 @dataclass
 class SymbolState:
@@ -189,7 +190,7 @@ class StateManager:
         try:
 
             symbols = _build_symbols(store.state.get("symbols", {}))
-            if not symbols:
+            if not symbols or len(symbols) == 0:
                 logger.info("No symbols available in state file")
 
             return BotState(

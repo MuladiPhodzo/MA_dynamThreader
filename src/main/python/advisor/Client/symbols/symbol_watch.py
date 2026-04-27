@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from advisor.core.state import BotState, SymbolState
+from advisor.core.state import BotState, SymbolState, symbolCycle
 
 
 @dataclass
@@ -40,6 +40,23 @@ class SymbolWatch:
 
     def active_symbol_names(self) -> list[str]:
         return [getattr(sym, "symbol", sym) for sym in self.active_symbols]
+
+    def is_backtest_active(self, symbol: str) -> bool:
+        sym = self.get(symbol)
+        if sym is None:
+            return False
+        return getattr(sym, "state", None) in {
+            symbolCycle.INITIALIZING,
+            symbolCycle.BACKTESTING,
+        }
+
+    def ingestible_symbol_names(self, include_all: bool = False) -> list[str]:
+        symbols = self.all_symbols if include_all else (self.active_symbols or self.all_symbols)
+        return [
+            sym.symbol
+            for sym in symbols
+            if not self.is_backtest_active(sym.symbol)
+        ]
 
     def refresh(self) -> None:
         self.all_symbols = list(self.bot.symbols or [])

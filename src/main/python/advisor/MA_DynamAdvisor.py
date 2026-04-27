@@ -13,8 +13,8 @@ from advisor.bootstrap.sys_bootstrap import BootstrapError, SystemBootstrap
 from advisor.core.state import BotLifecycle, StateManager, SymbolState, BotState, symbolCycle
 from advisor.core.event_bus import EventBus
 from advisor.core.flow_state import FlowStateStore
-from Strategy_model.indicators.signal_store import SignalStore
-from Strategy_model.indicators.strategy import StrategyManager
+from Strategy_model.signals.signal_store import SignalStore
+from Strategy_model.strategy_runner import StrategyManager
 from advisor.mt5_pipeline.runner import pipelineProcess
 from advisor.process.heartbeats import HeartbeatRegistry
 from advisor.process.process_engine import Supervisor
@@ -244,27 +244,23 @@ class Main:
                     sym.meta["Total_trades"] = 0
                 sym.meta.setdefault("Pip_size", 0)
                 changed = True
-            if sym.enabled:
-                sym.enabled = False
-                changed = True
-
         if changed:
             StateManager.save_bot_state(self.state_manager.bot)
             self.symbol_watch.refresh()
-            logger.info("Deferring symbol activation until backtest completes.")
+            logger.info("Normalized symbol metadata before startup.")
 
     def _init_core_instances(self):
         if self.client is None:
             raise RuntimeError("MT5 client not initialized")
 
         self.trade_state = TradeStateManager(self.client)
-        backtest_cfg = {}
-        try:
-            backtest_cfg = (self.config.data or {}).get("backtest", {})
-        except Exception:
-            backtest_cfg = {}
-        run_on_first_start = bool(backtest_cfg.get("run_on_first_start", True))
-        run_if_no_enabled = bool(backtest_cfg.get("run_if_no_enabled", True))
+        # backtest_cfg = {}
+        # try:
+        #     backtest_cfg = (self.config.data or {}).get("backtest", {})
+        # except Exception:
+        #     backtest_cfg = {}
+        # run_on_first_start = bool(backtest_cfg.get("run_on_first_start", True))
+        # run_if_no_enabled = bool(backtest_cfg.get("run_if_no_enabled", True))
 
         self.pipeline = pipelineProcess(
             client=self.client,
@@ -288,10 +284,9 @@ class Main:
             state_manager=self.state_manager,
             symbol_watch=self.symbol_watch,
             event_bus=self.event_bus,
-            registry=self.orch.registry,
-            run_on_first_start=run_on_first_start,
-            run_if_no_enabled=run_if_no_enabled,
+            registry=self.orch.registry
         )
+
         self.strategy = StrategyManager(
             scheduler=self.scheduler,
             event_bus=self.event_bus,
@@ -302,6 +297,9 @@ class Main:
             symbol_watch=self.symbol_watch,
             store=self.signal_store,
             state_manager=self.state_manager,
+            trade_config=getattr(self.config, "trade", None)
+            or getattr(self.config, "trade_configs", None)
+            or {},
         )
 
         self.execution = ExecutionProcess(
@@ -323,12 +321,14 @@ class Main:
                 state_manager=self.state_manager,
                 symbol_watch=self.symbol_watch,
                 health_bus=self.orch.health_bus,
+                event_bus=self.event_bus,
+                client=self.client,
             )
         )
 
         self.orch.register_process(name="pipeline", target=self.pipeline.run, depends=[])
         self.orch.register_process(name="backtest", target=self.backtest, depends=["pipeline"], event_driven=True)
-        self.orch.register_process(name="strategy", target=self.strategy, depends=["pipeline", "backtest"], event_driven=True)
+        self.orch.register_process(name="strategy", target=self.strategy, depends=["pipeline"], event_driven=True)
         self.orch.register_process(name="execution", target=self.execution, depends=["strategy"], event_driven=True)
         logger.info("Engines Ready.")
 

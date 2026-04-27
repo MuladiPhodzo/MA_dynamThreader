@@ -9,8 +9,11 @@ from advisor.MA_DynamAdvisor import Main
 from advisor.utils.logging_setup import configure_logging, get_logger
 from advisor.utils.error_handling import install_exception_hooks
 
+
 _HERE = Path(__file__).resolve().parent
 _PKG_ROOT = _HERE.parent
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
 if str(_PKG_ROOT) not in sys.path:
     sys.path.insert(0, str(_PKG_ROOT))
 

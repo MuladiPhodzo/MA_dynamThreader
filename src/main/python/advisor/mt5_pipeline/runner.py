@@ -46,7 +46,7 @@ class pipelineProcess:
         self.stop_event = shutdown_event
         self.scheduler = scheduler
         self.event_bus = event_bus
-        self.pipeline = core.MarketDataPipeline(self.client, self.cache, self.symbol_watch)
+        self.pipeline = core.MarketDataPipeline(self.client, self.cache, self.symbol_watch, state_manager)
         self.per_symbol_timeout = per_symbol_timeout
         self.max_concurrent = max_concurrent
         self.max_symbol_errors = max(1, int(max_symbol_errors))

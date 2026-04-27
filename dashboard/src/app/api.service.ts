@@ -2,8 +2,13 @@ import { Injectable } from "@angular/core";
 import { HttpClient } from "@angular/common/http";
 import { Observable } from "rxjs";
 import {
+  BacktestRequestPayload,
   AccountHistoryResponse,
   StatusResponse,
+  StrategyRegistryListResponse,
+  StrategyCreateRequestPayload,
+  StrategyCreateResponse,
+  StrategyCatalogResponse,
   SupportKbResponse,
   SupportTicketPayload,
   SupportTicketResponse,
@@ -39,8 +44,20 @@ export class ApiService {
     return this.http.post(`${this.baseUrl}/config/reload`, {});
   }
 
-  runBacktest() {
-    return this.http.post(`${this.baseUrl}/backtest/run`, {});
+  runBacktest(payload: BacktestRequestPayload = {}) {
+    return this.http.post(`${this.baseUrl}/backtest/run`, payload);
+  }
+
+  createStrategy(payload: StrategyCreateRequestPayload) {
+    return this.http.post<StrategyCreateResponse>(`${this.baseUrl}/strategy/create`, payload);
+  }
+
+  getStrategyList() {
+    return this.http.get<StrategyRegistryListResponse>(`${this.baseUrl}/strategy/list`);
+  }
+
+  getStrategyCatalog() {
+    return this.http.get<StrategyCatalogResponse>(`${this.baseUrl}/strategy/catalog`);
   }
 
   getAccountHistory() {

@@ -5,6 +5,7 @@ from advisor.Client.mt5Client import MetaTrader5Client
 from advisor.Client.symbols.symbol_watch import SymbolWatch
 from advisor.utils.dataHandler import CacheManager
 from advisor.utils.logging_setup import get_logger
+from advisor.core.state import BotLifecycle, StateManager
 
 logger = get_logger(__name__)
 
@@ -14,11 +15,12 @@ class MarketDataPipeline:
     Stateless market data ingestion logic.
     """
 
-    def __init__(self, client: MetaTrader5Client, cache_handler: CacheManager, symbol_watch: SymbolWatch):
+    def __init__(self, client: MetaTrader5Client, cache_handler: CacheManager, symbol_watch: SymbolWatch, state_manager: StateManager):
         self.client = client
         self.cache = cache_handler
         self.force_all_symbols: bool = True
         self.symbol_watch = symbol_watch
+        self.state_manager = state_manager
 
     def fetch_symbol(self, symbol: str, first_run: bool) -> Dict | None:
         try:
@@ -90,24 +92,44 @@ class MarketDataPipeline:
         max_concurrent: int | None = None,
     ) -> None:
         if self.force_all_symbols:
-            symbols = self.symbol_watch.all_symbol_names()
-            if not symbols:
+            candidates = self.symbol_watch.all_symbol_names()
+            if not candidates:
                 logger.warning("No symbols available to ingest.")
                 return
-            logger.info("Ingesting data for all symbols: %s", len(symbols))
+            logger.info("Ingesting data for all symbols: %s", len(candidates))
         else:
-            active_symbols = self.symbol_watch.active_symbol_names()
-            symbols = active_symbols or self.symbol_watch.all_symbol_names()
+            candidates = self.symbol_watch.active_symbol_names() or self.symbol_watch.all_symbol_names()
+
+        symbols = self.symbol_watch.ingestible_symbol_names(include_all=self.force_all_symbols)
+        blocked = [symbol for symbol in candidates if symbol not in symbols]
+
+        if blocked:
+            logger.info(
+                "Skipping %d symbols still under backtest: %s",
+                len(blocked),
+                ", ".join(blocked),
+            )
+        if not symbols:
+            logger.info("No symbols eligible for ingestion in this cycle.")
+            self.force_all_symbols = False
+            return
         semaphore = asyncio.Semaphore(max_concurrent) if max_concurrent else None
 
         async def _wrap(symbol: str):
             try:
+                sym_state = self.symbol_watch.get(symbol)
+                if sym_state is None:
+                    raise ValueError(f"Unknown symbol state for {symbol}")
+                first_run = True if sym_state.last_backtest is None else False
                 if semaphore:
                     async with semaphore:
-                        sym_state = self.symbol_watch.get(symbol)
-                        first_run = True if sym_state.last_backtest is None else False
+                        if not sym_state.enabled:
+                            self.state_manager.set_state(BotLifecycle.RUNNING_BACKTEST)
                         data = await self._ingest_with_timeout(symbol, first_run, per_symbol_timeout)
                 else:
+
+                    if not sym_state.enabled:
+                        self.state_manager.set_state(BotLifecycle.RUNNING_BACKTEST)
                     data = await self._ingest_with_timeout(symbol, first_run, per_symbol_timeout)
                 return symbol, data, None
             except Exception as exc:

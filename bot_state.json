@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "last_backtest_run": "2026-04-08T13:46:00.592104+00:00",
+  "last_backtest_run": null,
   "next_backtest_run": null,
   "backtest_running": false,
   "live_trading_enabled": true,
@@ -12,7 +12,8 @@
       "meta": {
         "Total_trades": 0,
         "Total_signals": 0,
-        "Pip_size": 0
+        "Pip_size": 0,
+        "desired_enabled": true
       }
     },
     "GBPUSD": {
@@ -22,7 +23,8 @@
       "meta": {
         "Total_trades": 0,
         "Total_signals": 0,
-        "Pip_size": 0
+        "Pip_size": 0,
+        "desired_enabled": true
       }
     },
     "USDCHF": {
@@ -32,7 +34,8 @@
       "meta": {
         "Total_trades": 0,
         "Total_signals": 0,
-        "Pip_size": 0
+        "Pip_size": 0,
+        "desired_enabled": true
       }
     },
     "USDJPY": {
@@ -42,7 +45,8 @@
       "meta": {
         "Total_trades": 0,
         "Total_signals": 0,
-        "Pip_size": 0
+        "Pip_size": 0,
+        "desired_enabled": true
       }
     },
     "USDCAD": {
@@ -52,7 +56,8 @@
       "meta": {
         "Total_trades": 0,
         "Total_signals": 0,
-        "Pip_size": 0
+        "Pip_size": 0,
+        "desired_enabled": true
       }
     },
     "AUDUSD": {
@@ -76,7 +81,7 @@
       }
     },
     "AUDCAD": {
-      "score": null,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -86,7 +91,7 @@
       }
     },
     "AUDCHF": {
-      "score": null,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -106,7 +111,7 @@
       }
     },
     "CHFJPY": {
-      "score": null,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -126,7 +131,7 @@
       }
     },
     "EURAUD": {
-      "score": 0.75,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -136,7 +141,7 @@
       }
     },
     "EURCHF": {
-      "score": 0.75,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -146,7 +151,7 @@
       }
     },
     "EURJPY": {
-      "score": 0.75,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -156,7 +161,7 @@
       }
     },
     "EURNZD": {
-      "score": 0.75,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -166,7 +171,7 @@
       }
     },
     "EURCAD": {
-      "score": 0.75,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -176,7 +181,7 @@
       }
     },
     "GBPCHF": {
-      "score": 0.75,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -186,7 +191,7 @@
       }
     },
     "GBPJPY": {
-      "score": 0.75,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -196,7 +201,7 @@
       }
     },
     "CADCHF": {
-      "score": 0.75,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -206,7 +211,7 @@
       }
     },
     "CHFSGD": {
-      "score": 0.75,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -216,7 +221,7 @@
       }
     },
     "EURDKK": {
-      "score": 0.75,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -226,7 +231,7 @@
       }
     },
     "EURHKD": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -236,7 +241,7 @@
       }
     },
     "EURHUF": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -246,7 +251,7 @@
       }
     },
     "EURNOK": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -256,7 +261,7 @@
       }
     },
     "EURPLN": {
-      "score": 0.75,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -266,7 +271,7 @@
       }
     },
     "EURSEK": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -276,7 +281,7 @@
       }
     },
     "EURSGD": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -286,7 +291,7 @@
       }
     },
     "EURTRY": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -296,7 +301,7 @@
       }
     },
     "EURZAR": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -306,7 +311,7 @@
       }
     },
     "GBPDKK": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -316,7 +321,7 @@
       }
     },
     "GBPNOK": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -326,7 +331,7 @@
       }
     },
     "GBPSEK": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -336,7 +341,7 @@
       }
     },
     "GBPSGD": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -346,7 +351,7 @@
       }
     },
     "NZDSGD": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -356,7 +361,7 @@
       }
     },
     "SGDJPY": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -366,7 +371,7 @@
       }
     },
     "USDCNH": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -376,7 +381,7 @@
       }
     },
     "USDDKK": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -386,7 +391,7 @@
       }
     },
     "USDHKD": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -396,7 +401,7 @@
       }
     },
     "USDHUF": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -406,7 +411,7 @@
       }
     },
     "USDMXN": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -416,7 +421,7 @@
       }
     },
     "USDNOK": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -426,7 +431,7 @@
       }
     },
     "USDPLN": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -436,7 +441,7 @@
       }
     },
     "USDSEK": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -446,7 +451,7 @@
       }
     },
     "USDSGD": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -456,7 +461,7 @@
       }
     },
     "USDTRY": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -466,7 +471,7 @@
       }
     },
     "USDZAR": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -476,7 +481,7 @@
       }
     },
     "CADJPY": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -486,7 +491,7 @@
       }
     },
     "GBPCAD": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -496,7 +501,7 @@
       }
     },
     "GBPAUD": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -506,7 +511,7 @@
       }
     },
     "GBPNZD": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -516,7 +521,7 @@
       }
     },
     "NZDCAD": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -526,7 +531,7 @@
       }
     },
     "NZDCHF": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -536,7 +541,7 @@
       }
     },
     "NZDJPY": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {
@@ -546,7 +551,7 @@
       }
     },
     "NZDUSD": {
-      "score": 0.5,
+      "score": 0.0,
       "last_backtest": null,
       "enabled": false,
       "meta": {

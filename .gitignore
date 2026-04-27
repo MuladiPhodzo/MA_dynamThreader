@@ -5,7 +5,7 @@ __pycache__/
 
 #development data directories
 data/
-cache/
+runtime/
 
 # Virtual environments
 venv/

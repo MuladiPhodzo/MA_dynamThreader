@@ -15,6 +15,9 @@ register_matplotlib_converters()
 logger = get_logger(__name__)
 
 class MetaTrader5Client:
+    DEFAULT_LIVE_BARS = 500
+    DATA_FETCH_WORKERS = 5
+
     def __init__(self, state: StateManager):
         self.symbols = []
         self.trade_cfg = None
@@ -28,8 +31,6 @@ class MetaTrader5Client:
         self._select_lock = threading.Lock()
         self._selected_symbols: set[str] = set()
 
-        self.account_info = None
-
         self.TF_dict = {
             '5M': {"tf_val": mt5.TIMEFRAME_M5, "prox_limit": 50, "interval_minutes": 5},
             '15M': {"tf_val": mt5.TIMEFRAME_M15, "prox_limit": 75, "interval_minutes": 15},
@@ -42,21 +43,20 @@ class MetaTrader5Client:
             '1D': {"tf_val": mt5.TIMEFRAME_D1, "prox_limit": 500, "interval_minutes": 1440},
         }
 
-        self.data_executor = ThreadPoolExecutor(max_workers=5)
+        self.data_executor = ThreadPoolExecutor(max_workers=self.DATA_FETCH_WORKERS)
 
     def _determine_bar_count(self, timeframe):
         if self.state.get_state() == BotLifecycle.RUNNING_BACKTEST:
             if timeframe in ("1M", "5M", "15M") :
-                return 3000
+                return 6000
             if timeframe in ("30M", "1H", "2H"):
-                return 2500
+                return 5500
             if timeframe in ("4H", "6H", "8H"):
-                return 2000
+                return 4000
             if timeframe in ("1D",):
-                return 1500
+                return 3000
             return 1000
-        else:
-            return 500
+        return self.DEFAULT_LIVE_BARS
 
     def initialize(self, user_data):
         logger.info("🔑 Logging in to MetaTrader 5...")
@@ -65,13 +65,14 @@ class MetaTrader5Client:
             res = self.connect_account(user_data)
 
             if not res:
+                error = mt5.last_error()
                 messagebox.showerror(
-                    "Connection failed", f"Failed to log in with error code ={mt5.last_error()}")
-                logger.info(f"failed to log in with error code ={mt5.last_error()}")
+                    "Connection failed", f"Failed to log in with error code ={error}")
+                logger.info("failed to log in with error code =%s", error)
                 return self.close()
             else:
-                self.account_info = mt5.account_info()._asdict()
-                self.terminal_info = mt5.terminal_info()._asdict()
+                self.account_info = self._asdict_or_empty(mt5.account_info())
+                self.terminal_info = self._asdict_or_empty(mt5.terminal_info())
                 self.creds = user_data
 
             logger.info(f"✅ Successfully connected to MT5 account {user_data['account_id']} on server '{user_data['server']}'")
@@ -80,16 +81,17 @@ class MetaTrader5Client:
             logger.critical(f"Connection to Metatrader terminal refused with: {e}")
 
     def connect_account(self, user_data):
-        if user_data is not None:
-            if not mt5.initialize(
-                login=int(user_data['account_id']),
-                password=user_data['password'],
-                server=user_data['server']
-            ):
-                return False
-            else:
-                return True
-        raise ConnectionError
+        if user_data is None:
+            raise ConnectionError("Missing MT5 credentials")
+
+        try:
+            account_id = int(user_data["account_id"])
+            password = user_data["password"]
+            server = user_data["server"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ConnectionError("Invalid MT5 credentials") from exc
+
+        return bool(mt5.initialize(login=account_id, password=password, server=server))
 
     def check_symbols_availability(self):
         """
@@ -103,7 +105,7 @@ class MetaTrader5Client:
         Returns:
             bool: True if all symbols are available, False otherwise.
         """
-        available_symbols = [s.name for s in mt5.symbols_get()]
+        available_symbols = [s.name for s in (mt5.symbols_get() or [])]
         for pair in self.symbols:
             if pair not in available_symbols:
                 logger.info(
@@ -141,10 +143,30 @@ class MetaTrader5Client:
         return symbols
 
     def get_acc_attr(self, name):
-        return self.account_info.get(name)
+        return (self.account_info or {}).get(name)
+
+    def get_account_snapshot(self) -> dict:
+        account = self._asdict_or_empty(mt5.account_info())
+        if account:
+            self.account_info = account
+        return self.account_info or {}
 
     def get_history(self, utc_from):
-        return mt5.history_deals_get(utc_from, datetime.now(datetime.timezone.utc))
+        return mt5.history_deals_get(utc_from, datetime.datetime.now(datetime.timezone.utc))
+
+    def get_account_deals(self, utc_from: datetime.datetime | None = None, utc_to: datetime.datetime | None = None) -> list[dict]:
+        utc_to = utc_to or datetime.datetime.now(datetime.timezone.utc)
+        utc_from = utc_from or (utc_to - datetime.timedelta(days=365))
+        deals = mt5.history_deals_get(utc_from, utc_to)
+        if deals is None:
+            logger.info("Failed to get account deal history (error=%s)", mt5.last_error())
+            return []
+
+        rows: list[dict] = []
+        for deal in deals:
+            asdict = getattr(deal, "_asdict", None)
+            rows.append(asdict() if callable(asdict) else dict(deal))
+        return rows
 
     def get_live_data(self, symbol, timeframe , bars=1000) -> pd.DataFrame:
         """
@@ -160,15 +182,15 @@ class MetaTrader5Client:
         - A message if data retrieval fails.
         - The retrieved market data.
         """
-        data = pd.DataFrame()
         rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, bars)
-        if rates is None:
+        if rates is None or len(rates) == 0:
             logger.info(f"Failed to get data for {symbol} (error={mt5.last_error()})")
             return None
 
-        data = pd.concat([pd.DataFrame(rates)])
+        data = pd.DataFrame(rates)
         # convert timestamps to datetime
-        data["time"] = pd.to_datetime(data["time"], unit="s")
+        if "time" in data.columns:
+            data["time"] = pd.to_datetime(data["time"], unit="s", utc=True)
 
         return data
 
@@ -233,7 +255,10 @@ class MetaTrader5Client:
             tf_name = futures[future]
             try:
                 df = future.result()
-                results[tf_name] = pd.DataFrame(df)
+                if df is None or df.empty:
+                    logger.warning("%s %s returned no rows", symbol, tf_name)
+                    continue
+                results[tf_name] = df
             except Exception as e:
                 logger.exception("%s %s fetch failed: %s", symbol, tf_name, e)
 
@@ -262,9 +287,20 @@ class MetaTrader5Client:
             self._selected_symbols.add(symbol)
             return True
 
+    def _asdict_or_empty(self, value) -> dict:
+        if value is None:
+            return {}
+        asdict = getattr(value, "_asdict", None)
+        if callable(asdict):
+            return asdict()
+        if isinstance(value, dict):
+            return value
+        return {}
+
     def close(self):
         """ Close the MT5 connection.
         """
+        self.data_executor.shutdown(wait=False, cancel_futures=True)
         mt5.shutdown()
         logger.info("🔌 Disconnected from MetaTrader 5.")
         return False

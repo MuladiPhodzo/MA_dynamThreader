@@ -1,9 +1,9 @@
 {
   "restart_counts": {
-    "pipeline": 5,
-    "backtest": 1,
-    "strategy": 1,
-    "execution": 3
+    "pipeline": 0,
+    "backtest": 0,
+    "strategy": 0,
+    "execution": 0
   },
-  "last_backtest": "2026-03-16T09:28:20.089195+00:00"
+  "last_backtest": null
 }

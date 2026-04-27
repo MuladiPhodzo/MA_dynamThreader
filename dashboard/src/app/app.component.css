@@ -94,7 +94,44 @@
 
 .sidebar-actions {
   display: grid;
-  gap: 10px;
+  gap: 8px;
+}
+
+.backtest-controls {
+  display: grid;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--panel-border);
+  background: rgba(13, 27, 42, 0.6);
+}
+
+.backtest-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sidebar-actions button,
+.sidebar-actions .field input,
+.sidebar-actions .field select {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.sidebar-actions .nav-title {
+  font-size: 10px;
+}
+
+.sidebar-actions .field {
+  gap: 4px;
+}
+
+.sidebar-actions .field label {
+  font-size: 10px;
 }
 
 .content {
@@ -350,6 +387,90 @@ button.ghost {
   flex-wrap: wrap;
 }
 
+.activity-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(260px, 0.8fr);
+  gap: 12px;
+}
+
+.daily-activity,
+.cashflow-list {
+  display: grid;
+  gap: 8px;
+}
+
+.daily-row {
+  display: grid;
+  grid-template-columns: 92px minmax(120px, 1fr) 82px 72px;
+  gap: 10px;
+  align-items: center;
+  font-size: 12px;
+}
+
+.daily-date,
+.cashflow-date {
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+}
+
+.daily-bars {
+  display: grid;
+  gap: 4px;
+}
+
+.bar-track {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  overflow: hidden;
+}
+
+.bar {
+  height: 100%;
+  min-width: 4px;
+  border-radius: inherit;
+}
+
+.bar.profit {
+  background: var(--ok);
+}
+
+.bar.loss {
+  background: var(--bad);
+}
+
+.daily-net,
+.cashflow-amount {
+  text-align: right;
+  font-weight: 600;
+  color: var(--ok);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+}
+
+.daily-net.negative,
+.cashflow-amount.negative {
+  color: var(--bad);
+}
+
+.daily-trades,
+.cashflow-note {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.cashflow-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(17, 29, 46, 0.6);
+}
+
 .snapshot-list {
   display: grid;
   gap: 8px;
@@ -372,6 +493,30 @@ button.ghost {
 
 .snapshot-value {
   font-weight: 600;
+}
+
+.strategy-registry {
+  display: grid;
+  gap: 8px;
+  overflow-x: auto;
+}
+
+.strategy-registry-row {
+  display: grid;
+  grid-template-columns: 1.2fr 0.5fr 0.6fr 0.5fr 0.5fr 1.5fr 1.2fr;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  min-width: 760px;
+  font-size: 12px;
+}
+
+.strategy-registry-header {
+  text-transform: uppercase;
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.08em;
 }
 
 .process-list {
@@ -583,6 +728,154 @@ button.ghost {
   margin-bottom: 16px;
 }
 
+.strategy-form {
+  display: grid;
+  gap: 14px;
+}
+
+.form-section {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  background: rgba(9, 16, 26, 0.55);
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.form-section-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--muted);
+  letter-spacing: 0.09em;
+}
+
+.strategy-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.strategy-grid-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.strategy-grid-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.strategy-grid-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.check-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.check-row input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+}
+
+.tool-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.compact-picker {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.tool-card {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.tool-card.active {
+  border-color: rgba(95, 195, 255, 0.42);
+  background: rgba(95, 195, 255, 0.08);
+}
+
+.tool-card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  color: var(--ink);
+}
+
+.tool-card-head input {
+  margin-top: 3px;
+}
+
+.tool-card-head strong,
+.tool-card-head small {
+  display: block;
+}
+
+.tool-card-head small {
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.tool-param-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.shared-params {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 10px;
+}
+
+.field.compact {
+  gap: 5px;
+}
+
+.field.compact label {
+  font-size: 10px;
+}
+
+.param-check {
+  min-height: 36px;
+}
+
+.empty-tools {
+  border: 1px dashed rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+  color: var(--muted);
+  padding: 10px;
+  font-size: 12px;
+}
+
+.strategy-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.strategy-preview {
+  margin: 0;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(5, 10, 16, 0.9);
+  color: #d6dfeb;
+  padding: 12px;
+  max-height: 440px;
+  overflow: auto;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .support-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -666,8 +959,20 @@ button.ghost {
   }
 
   .symbols-toolbar,
-  .log-filters {
+  .log-filters,
+  .strategy-grid-2,
+  .strategy-grid-3,
+  .strategy-grid-4 {
     grid-template-columns: 1fr;
+  }
+
+  .activity-grid,
+  .daily-row {
+    grid-template-columns: 1fr;
+  }
+
+  .daily-net {
+    text-align: left;
   }
 
   .support-form {

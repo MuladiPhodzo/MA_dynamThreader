@@ -4,6 +4,9 @@ from threading import Event
 import pytest
 
 from advisor.core import events
+from advisor.core.state import BotState, SymbolState, symbolCycle
+from advisor.Client.symbols.symbol_watch import SymbolWatch
+from advisor.mt5_pipeline import core as pipeline_core
 from advisor.mt5_pipeline import runner as pipeline_runner
 
 
@@ -99,10 +102,11 @@ class DummyStateManager:
 
 
 class FakePipeline:
-    def __init__(self, client, cache_handler, symbol_watch):
+    def __init__(self, client, cache_handler, symbol_watch, state_manager):
         self.client = client
         self.cache = cache_handler
         self.symbol_watch = symbol_watch
+        self.state_manager = state_manager
         self.called = False
 
     async def run_once(self, on_symbol=None, per_symbol_timeout=None, max_concurrent=None):
@@ -110,6 +114,23 @@ class FakePipeline:
         if on_symbol is not None:
             for symbol in self.symbol_watch.active_symbol_names():
                 on_symbol(symbol, True)
+
+
+class CountingClient:
+    def __init__(self):
+        self.calls = []
+
+    def get_multi_tf_data(self, symbol: str, backtest: bool = False):
+        self.calls.append((symbol, backtest))
+        return {"15M": [1, 2, 3]}
+
+
+class DummyCache:
+    def __init__(self):
+        self.saved = []
+
+    def set_atomic(self, symbol: str, data):
+        self.saved.append((symbol, data))
 
 
 def _build_pipeline(monkeypatch):
@@ -147,3 +168,41 @@ async def test_pipeline_poll_cycle_publishes_market_data(monkeypatch):
     assert any(
         event_type == events.MARKET_DATA_READY for event_type, _payload in event_bus.published
     ), "Expected MARKET_DATA_READY publish after polling"
+
+
+@pytest.mark.asyncio
+async def test_market_data_pipeline_skips_symbols_with_active_backtests():
+    client = CountingClient()
+    cache = DummyCache()
+    bot = BotState(
+        symbols=[
+            SymbolState(symbol="EURUSD", enabled=True, state=symbolCycle.READY),
+            SymbolState(symbol="GBPUSD", enabled=True, state=symbolCycle.BACKTESTING),
+        ]
+    )
+    symbol_watch = SymbolWatch(bot)
+    pipeline = pipeline_core.MarketDataPipeline(
+        client=client,
+        cache_handler=cache,
+        symbol_watch=symbol_watch,
+        state_manager=DummyStateManager(),
+    )
+
+    await pipeline.run_once()
+
+    assert client.calls == [("EURUSD", True)]
+    assert [symbol for symbol, _data in cache.saved] == ["EURUSD"]
+
+
+def test_symbol_watch_excludes_backtesting_symbols_from_ingestion():
+    bot = BotState(
+        symbols=[
+            SymbolState(symbol="EURUSD", enabled=True, state=symbolCycle.READY),
+            SymbolState(symbol="GBPUSD", enabled=True, state=symbolCycle.INITIALIZING),
+            SymbolState(symbol="USDJPY", enabled=False, state=symbolCycle.BACKTESTING),
+        ]
+    )
+    symbol_watch = SymbolWatch(bot)
+
+    assert symbol_watch.ingestible_symbol_names() == ["EURUSD"]
+    assert symbol_watch.ingestible_symbol_names(include_all=True) == ["EURUSD"]

@@ -34,6 +34,9 @@
       <button class="nav-item" [class.active]="activePanel === 'symbols'" (click)="setActivePanel('symbols')">
         Symbols
       </button>
+      <button class="nav-item" [class.active]="activePanel === 'strategy'" (click)="setActivePanel('strategy')">
+        Strategy
+      </button>
       <button class="nav-item" [class.active]="activePanel === 'bot'" (click)="setActivePanel('bot')">
         Bot
       </button>
@@ -51,7 +54,29 @@
     <div class="sidebar-actions">
       <div class="nav-title">Quick Actions</div>
       <button class="primary" (click)="reloadConfig()">Reload Config</button>
-      <button class="ghost" (click)="runBacktest()">Run Backtest Now</button>
+      <button class="ghost" (click)="runBacktest()">Reset Backtest State</button>
+      <div class="backtest-controls">
+        <div class="nav-title">Targeted Backtest</div>
+        <div class="field">
+          <label>Symbol</label>
+          <select [(ngModel)]="backtestSymbol" (ngModelChange)="persistBacktestSelection()">
+            <option value="">Select symbol</option>
+            <option *ngFor="let symbol of symbolNames()" [value]="symbol">{{ symbol }}</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Strategy</label>
+          <input
+            type="text"
+            [(ngModel)]="backtestStrategy"
+            (ngModelChange)="persistBacktestSelection()"
+            placeholder="EMA_ProxiM8te"
+          />
+        </div>
+        <div class="backtest-actions">
+          <button class="primary" (click)="runTargetedBacktest()">Run Selected</button>
+        </div>
+      </div>
     </div>
   </aside>
 
@@ -83,6 +108,7 @@
       <select id="panel-select" [(ngModel)]="activePanel">
         <option value="account">Account</option>
         <option value="symbols">Symbols</option>
+        <option value="strategy">Strategy</option>
         <option value="bot">Bot</option>
         <option value="logs">Logs</option>
         <option value="store">Store</option>
@@ -97,14 +123,37 @@
       </div>
       <div class="account-grid">
         <div class="card">
-          <div class="card-label">Latest equity</div>
-          <div class="card-value">{{ (accountSummary?.latest || 0) | number: "1.2-2" }}</div>
+          <div class="card-label">Equity</div>
+          <div class="card-value">
+            {{ (accountSnapshot?.equity ?? accountSummary?.latest ?? 0) | number: "1.2-2" }}
+            {{ accountSnapshot?.currency || "" }}
+          </div>
           <div class="card-sub">
             Change: {{ equityChange | number: "1.2-2" }} ({{ equityChangePct | number: "1.1-1" }}%)
           </div>
         </div>
         <div class="card">
-          <div class="card-label">History range</div>
+          <div class="card-label">Balance</div>
+          <div class="card-value">{{ (accountSnapshot?.balance ?? 0) | number: "1.2-2" }}</div>
+          <div class="card-sub">Profit: {{ (accountSnapshot?.profit ?? 0) | number: "1.2-2" }}</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Free Margin</div>
+          <div class="card-value">{{ (accountSnapshot?.margin_free ?? 0) | number: "1.2-2" }}</div>
+          <div class="card-sub">Used: {{ (accountSnapshot?.margin ?? 0) | number: "1.2-2" }}</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Margin Level</div>
+          <div class="card-value">{{ (accountSnapshot?.margin_level ?? 0) | number: "1.1-1" }}%</div>
+          <div class="card-sub">Leverage: 1:{{ accountSnapshot?.leverage || "--" }}</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Account</div>
+          <div class="card-value">{{ accountSnapshot?.login || "--" }}</div>
+          <div class="card-sub">{{ accountSnapshot?.server || accountHistory?.source || "Unknown source" }}</div>
+        </div>
+        <div class="card">
+          <div class="card-label">History Range</div>
           <div class="card-value">
             {{ (accountSummary?.min || 0) | number: "1.2-2" }} -
             {{ (accountSummary?.max || 0) | number: "1.2-2" }}
@@ -112,9 +161,14 @@
           <div class="card-sub">Points: {{ accountSummary?.count || 0 }}</div>
         </div>
         <div class="card">
-          <div class="card-label">History source</div>
-          <div class="card-value">{{ accountHistory?.source || "Unknown" }}</div>
-          <div class="card-sub">Last updated: {{ lastUpdated || "--" }}</div>
+          <div class="card-label">Activity P/L</div>
+          <div class="card-value">{{ accountActivityNet() | number: "1.2-2" }}</div>
+          <div class="card-sub">Trades: {{ accountActivityTrades() }}</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Cash Movement</div>
+          <div class="card-value">{{ accountDeposits() | number: "1.2-2" }}</div>
+          <div class="card-sub">Withdrawals: {{ accountWithdrawals() | number: "1.2-2" }}</div>
         </div>
       </div>
       <div class="history-block">
@@ -139,6 +193,48 @@
           <div class="history-placeholder">No account history received yet.</div>
         </ng-template>
       </div>
+      <div class="activity-grid">
+        <div class="history-block">
+          <div class="history-title">Trades Per Day</div>
+          <div class="history-placeholder" *ngIf="!accountDailyActivity.length">
+            Daily profit/loss will appear once trade history is available.
+          </div>
+          <div class="daily-activity" *ngIf="accountDailyActivity.length">
+            <div class="daily-row" *ngFor="let day of recentDailyActivity()">
+              <div class="daily-date">{{ day.date }}</div>
+              <div class="daily-bars">
+                <div class="bar-track">
+                  <div class="bar profit" [style.width]="activityBarWidth(day.profit)"></div>
+                </div>
+                <div class="bar-track">
+                  <div class="bar loss" [style.width]="activityBarWidth(day.loss)"></div>
+                </div>
+              </div>
+              <div class="daily-net" [class.negative]="day.net < 0">
+                {{ day.net | number: "1.2-2" }}
+              </div>
+              <div class="daily-trades">{{ day.trades }} trades</div>
+            </div>
+          </div>
+        </div>
+        <div class="history-block">
+          <div class="history-title">Deposits &amp; Withdrawals</div>
+          <div class="history-placeholder" *ngIf="!accountCashflows.length">
+            Deposits and withdrawals will appear when account movement rows are available.
+          </div>
+          <div class="cashflow-list" *ngIf="accountCashflows.length">
+            <div class="cashflow-item" *ngFor="let flow of accountCashflows.slice(-8).reverse()">
+              <div>
+                <div class="cashflow-date">{{ flow.date }}</div>
+                <div class="cashflow-note">{{ flow.note }}</div>
+              </div>
+              <div class="cashflow-amount" [class.negative]="flow.amount < 0">
+                {{ flow.amount | number: "1.2-2" }}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
       <div class="history-block">
         <div class="history-title">Recent Snapshots</div>
         <div class="history-placeholder">
@@ -148,6 +244,32 @@
           <div class="snapshot-item" *ngFor="let point of recentSnapshots">
             <div class="snapshot-time">{{ point.timestamp }}</div>
             <div class="snapshot-value">{{ point.equity | number: "1.2-2" }}</div>
+          </div>
+        </div>
+      </div>
+      <div class="history-block">
+        <div class="history-title">Strategy Registry</div>
+        <div class="history-placeholder" *ngIf="!strategyRegistry.length">
+          Strategy registry is empty.
+        </div>
+        <div class="strategy-registry" *ngIf="strategyRegistry.length">
+          <div class="strategy-registry-row strategy-registry-header">
+            <div>Strategy</div>
+            <div>Signals</div>
+            <div>Backtests</div>
+            <div>Pass</div>
+            <div>Fail</div>
+            <div>Symbols</div>
+            <div>Updated</div>
+          </div>
+          <div class="strategy-registry-row" *ngFor="let row of strategyRegistry">
+            <div class="mono">{{ row.name }}</div>
+            <div>{{ row.stats?.signal_count || 0 }}</div>
+            <div>{{ row.stats?.backtest_count || 0 }}</div>
+            <div>{{ row.stats?.pass_count || 0 }}</div>
+            <div>{{ row.stats?.fail_count || 0 }}</div>
+            <div>{{ (row.symbols || []).join(", ") || "--" }}</div>
+            <div class="mono">{{ row.updated_at || "--" }}</div>
           </div>
         </div>
       </div>
@@ -209,6 +331,328 @@
         <div class="empty" *ngIf="loading">Loading status...</div>
         <div class="empty" *ngIf="!loading">No telemetry yet.</div>
       </ng-template>
+    </section>
+
+    <section class="panel" *ngIf="activePanel === 'strategy'">
+      <div class="panel-header">
+        <h2>Create Strategy</h2>
+        <span class="panel-tag">Compiler</span>
+      </div>
+      <div class="strategy-form">
+        <div class="form-section">
+          <div class="form-section-title">Identity</div>
+          <div class="strategy-grid strategy-grid-4">
+            <div class="field">
+              <label>Strategy Name</label>
+              <input type="text" [(ngModel)]="strategyForm.name" (ngModelChange)="compileStrategyPreview()" placeholder="EMA_Proxim8te" />
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <div class="form-section-title">Timeframes</div>
+          <div class="strategy-grid strategy-grid-4">
+            <div class="field">
+              <label>HTF</label>
+              <input type="text" [(ngModel)]="strategyForm.htf" (ngModelChange)="compileStrategyPreview()" placeholder="1D" />
+            </div>
+            <div class="field">
+              <label>TREND</label>
+              <input type="text" [(ngModel)]="strategyForm.trend" (ngModelChange)="compileStrategyPreview()" placeholder="4H" />
+            </div>
+            <div class="field">
+              <label>BIAS</label>
+              <input type="text" [(ngModel)]="strategyForm.bias" (ngModelChange)="compileStrategyPreview()" placeholder="1H" />
+            </div>
+            <div class="field">
+              <label>ENTRY</label>
+              <input type="text" [(ngModel)]="strategyForm.entry" (ngModelChange)="compileStrategyPreview()" placeholder="15M" />
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <div class="form-section-title">Indicators</div>
+          <div class="empty-tools" *ngIf="strategyCatalogError">{{ strategyCatalogError }}</div>
+          <label class="check-row">
+            <input type="checkbox" [(ngModel)]="strategyForm.indicatorsEnabled" (ngModelChange)="compileStrategyPreview()" />
+            <span>Enable indicators</span>
+          </label>
+          <div class="empty-tools" *ngIf="!toolOptions('indicators').length && !strategyCatalogError">
+            No registered indicators found.
+          </div>
+          <div class="tool-picker" *ngIf="toolOptions('indicators').length">
+            <div
+              class="tool-card"
+              *ngFor="let tool of toolOptions('indicators')"
+              [class.active]="isToolSelected('indicators', tool.name)"
+            >
+              <label class="tool-card-head">
+                <input
+                  type="checkbox"
+                  [ngModel]="isToolSelected('indicators', tool.name)"
+                  (ngModelChange)="setToolSelected('indicators', tool.name, $event)"
+                />
+                <span>
+                  <strong>{{ tool.label }}</strong>
+                  <small>{{ tool.name }} · {{ tool.type }}</small>
+                </span>
+              </label>
+              <div class="tool-param-grid" *ngIf="isToolSelected('indicators', tool.name) && indicatorParamEntries(tool).length">
+                <div class="field compact" *ngFor="let param of indicatorParamEntries(tool)">
+                  <label>{{ labelize(param.key) }}</label>
+                  <input
+                    *ngIf="param.type === 'number'"
+                    type="number"
+                    step="any"
+                    [ngModel]="getIndicatorParam(tool.name, param.key)"
+                    (ngModelChange)="setIndicatorParam(tool.name, param.key, $event)"
+                  />
+                  <input
+                    *ngIf="param.type === 'text'"
+                    type="text"
+                    [ngModel]="getIndicatorParam(tool.name, param.key)"
+                    (ngModelChange)="setIndicatorParam(tool.name, param.key, $event)"
+                  />
+                  <label class="check-row param-check" *ngIf="param.type === 'boolean'">
+                    <input
+                      type="checkbox"
+                      [ngModel]="getIndicatorParam(tool.name, param.key)"
+                      (ngModelChange)="setIndicatorParam(tool.name, param.key, $event)"
+                    />
+                    <span>{{ getIndicatorParam(tool.name, param.key) ? "On" : "Off" }}</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <div class="form-section-title">Technical Tools</div>
+          <label class="check-row">
+            <input type="checkbox" [(ngModel)]="strategyForm.technicalEnabled" (ngModelChange)="compileStrategyPreview()" />
+            <span>Enable technical tools</span>
+          </label>
+          <div class="empty-tools" *ngIf="!toolOptions('technical').length && !strategyCatalogError">
+            No registered technical tools found.
+          </div>
+          <div class="tool-picker compact-picker" *ngIf="toolOptions('technical').length">
+            <div
+              class="tool-card"
+              *ngFor="let tool of toolOptions('technical')"
+              [class.active]="isToolSelected('technical', tool.name)"
+            >
+              <label class="tool-card-head">
+                <input
+                  type="checkbox"
+                  [ngModel]="isToolSelected('technical', tool.name)"
+                  (ngModelChange)="setToolSelected('technical', tool.name, $event)"
+                />
+                <span>
+                  <strong>{{ tool.label }}</strong>
+                  <small>{{ tool.name }} · {{ tool.type }}</small>
+                </span>
+              </label>
+            </div>
+          </div>
+          <div class="tool-param-grid shared-params" *ngIf="technicalParamEntries().length">
+            <div class="field compact" *ngFor="let param of technicalParamEntries()">
+              <label>{{ labelize(param.key) }}</label>
+              <input
+                *ngIf="param.type === 'number'"
+                type="number"
+                step="any"
+                [ngModel]="strategyForm.technicalParams[param.key]"
+                (ngModelChange)="setTechnicalParam(param.key, $event)"
+              />
+              <input
+                *ngIf="param.type === 'text'"
+                type="text"
+                [ngModel]="strategyForm.technicalParams[param.key]"
+                (ngModelChange)="setTechnicalParam(param.key, $event)"
+              />
+              <label class="check-row param-check" *ngIf="param.type === 'boolean'">
+                <input
+                  type="checkbox"
+                  [ngModel]="strategyForm.technicalParams[param.key]"
+                  (ngModelChange)="setTechnicalParam(param.key, $event)"
+                />
+                <span>{{ strategyForm.technicalParams[param.key] ? "On" : "Off" }}</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <div class="form-section-title">Patterns</div>
+          <label class="check-row">
+            <input type="checkbox" [(ngModel)]="strategyForm.patternsEnabled" (ngModelChange)="compileStrategyPreview()" />
+            <span>Enable patterns</span>
+          </label>
+          <div class="empty-tools" *ngIf="!toolOptions('patterns').length && !strategyCatalogError">
+            No registered patterns found.
+          </div>
+          <div class="tool-picker compact-picker" *ngIf="toolOptions('patterns').length">
+            <div
+              class="tool-card"
+              *ngFor="let tool of toolOptions('patterns')"
+              [class.active]="isToolSelected('patterns', tool.name)"
+            >
+              <label class="tool-card-head">
+                <input
+                  type="checkbox"
+                  [ngModel]="isToolSelected('patterns', tool.name)"
+                  (ngModelChange)="setToolSelected('patterns', tool.name, $event)"
+                />
+                <span>
+                  <strong>{{ tool.label }}</strong>
+                  <small>{{ tool.name }} · {{ tool.type }}</small>
+                </span>
+              </label>
+            </div>
+          </div>
+          <div class="tool-param-grid shared-params" *ngIf="patternParamEntries().length">
+            <div class="field compact" *ngFor="let param of patternParamEntries()">
+              <label>{{ labelize(param.key) }}</label>
+              <input
+                *ngIf="param.type === 'number'"
+                type="number"
+                step="any"
+                [ngModel]="strategyForm.patternParams[param.key]"
+                (ngModelChange)="setPatternParam(param.key, $event)"
+              />
+              <input
+                *ngIf="param.type === 'text'"
+                type="text"
+                [ngModel]="strategyForm.patternParams[param.key]"
+                (ngModelChange)="setPatternParam(param.key, $event)"
+              />
+              <label class="check-row param-check" *ngIf="param.type === 'boolean'">
+                <input
+                  type="checkbox"
+                  [ngModel]="strategyForm.patternParams[param.key]"
+                  (ngModelChange)="setPatternParam(param.key, $event)"
+                />
+                <span>{{ strategyForm.patternParams[param.key] ? "On" : "Off" }}</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <div class="form-section-title">Confluence, Rules, Live, Risk</div>
+          <label class="check-row">
+            <input type="checkbox" [(ngModel)]="strategyForm.confluenceEnabled" (ngModelChange)="compileStrategyPreview()" />
+            <span>Enable confluence</span>
+          </label>
+          <div class="strategy-grid strategy-grid-3">
+            <div class="field">
+              <label>Min Alignment</label>
+              <input type="number" step="0.01" [(ngModel)]="strategyForm.minAlignment" (ngModelChange)="compileStrategyPreview()" />
+            </div>
+            <div class="field">
+              <label>Min Trend Strength</label>
+              <input type="number" step="0.01" [(ngModel)]="strategyForm.minTrendStrength" (ngModelChange)="compileStrategyPreview()" />
+            </div>
+            <div class="field">
+              <label>Live Buffer</label>
+              <input type="number" [(ngModel)]="strategyForm.liveBufferSize" (ngModelChange)="compileStrategyPreview()" />
+            </div>
+          </div>
+          <div class="strategy-grid strategy-grid-3">
+            <label class="check-row">
+              <input type="checkbox" [(ngModel)]="strategyForm.requireAlignment" (ngModelChange)="compileStrategyPreview()" />
+              <span>Require alignment</span>
+            </label>
+            <label class="check-row">
+              <input type="checkbox" [(ngModel)]="strategyForm.requireBiasEngulfing" (ngModelChange)="compileStrategyPreview()" />
+              <span>Require bias engulfing</span>
+            </label>
+            <label class="check-row">
+              <input type="checkbox" [(ngModel)]="strategyForm.requireEntryTrigger" (ngModelChange)="compileStrategyPreview()" />
+              <span>Require entry trigger</span>
+            </label>
+            <label class="check-row">
+              <input type="checkbox" [(ngModel)]="strategyForm.requireMomentumConfirmation" (ngModelChange)="compileStrategyPreview()" />
+              <span>Require momentum confirmation</span>
+            </label>
+            <label class="check-row">
+              <input type="checkbox" [(ngModel)]="strategyForm.requireSmcContext" (ngModelChange)="compileStrategyPreview()" />
+              <span>Require SMC context</span>
+            </label>
+            <label class="check-row">
+              <input type="checkbox" [(ngModel)]="strategyForm.liveEnabled" (ngModelChange)="compileStrategyPreview()" />
+              <span>Enable live mode</span>
+            </label>
+          </div>
+          <div class="strategy-grid strategy-grid-4">
+            <div class="field">
+              <label>Min Score</label>
+              <input type="number" step="0.01" [(ngModel)]="strategyForm.minScore" (ngModelChange)="compileStrategyPreview()" />
+            </div>
+            <div class="field">
+              <label>Min Confidence</label>
+              <input type="number" [(ngModel)]="strategyForm.minConfidence" (ngModelChange)="compileStrategyPreview()" />
+            </div>
+            <div class="field">
+              <label>Entry Proximity</label>
+              <input type="number" [(ngModel)]="strategyForm.proximity" (ngModelChange)="compileStrategyPreview()" />
+            </div>
+            <div class="field">
+              <label>Entry Levels</label>
+              <input type="number" [(ngModel)]="strategyForm.levels" (ngModelChange)="compileStrategyPreview()" />
+            </div>
+          </div>
+          <div class="strategy-grid strategy-grid-3">
+            <label class="check-row">
+              <input type="checkbox" [(ngModel)]="strategyForm.entryFiltersEnabled" (ngModelChange)="compileStrategyPreview()" />
+              <span>Entry filters enabled</span>
+            </label>
+            <label class="check-row">
+              <input type="checkbox" [(ngModel)]="strategyForm.requireMtfAlignment" (ngModelChange)="compileStrategyPreview()" />
+              <span>Require MTF alignment</span>
+            </label>
+            <label class="check-row">
+              <input type="checkbox" [(ngModel)]="strategyForm.requireMomentum" (ngModelChange)="compileStrategyPreview()" />
+              <span>Require momentum</span>
+            </label>
+            <label class="check-row">
+              <input type="checkbox" [(ngModel)]="strategyForm.requireSmcConfluence" (ngModelChange)="compileStrategyPreview()" />
+              <span>Require SMC confluence</span>
+            </label>
+            <label class="check-row">
+              <input type="checkbox" [(ngModel)]="strategyForm.highFrequencyEnabled" (ngModelChange)="compileStrategyPreview()" />
+              <span>High-frequency mode</span>
+            </label>
+          </div>
+          <div class="strategy-grid strategy-grid-3">
+            <div class="field">
+              <label>Max Trades</label>
+              <input type="number" [(ngModel)]="strategyForm.maxTrades" (ngModelChange)="compileStrategyPreview()" />
+            </div>
+            <div class="field">
+              <label>SL ATR Mult</label>
+              <input type="number" step="0.1" [(ngModel)]="strategyForm.slAtrMult" (ngModelChange)="compileStrategyPreview()" />
+            </div>
+            <div class="field">
+              <label>TP ATR Mult</label>
+              <input type="number" step="0.1" [(ngModel)]="strategyForm.tpAtrMult" (ngModelChange)="compileStrategyPreview()" />
+            </div>
+          </div>
+        </div>
+
+        <div class="strategy-actions">
+          <button class="ghost" (click)="resetStrategyForm()">Reset Defaults</button>
+          <button class="ghost" (click)="compileStrategy()">Compile Preview</button>
+          <button class="primary" (click)="createStrategy()">Save Strategy</button>
+        </div>
+
+        <div class="form-section">
+          <div class="form-section-title">Compiled JSON</div>
+          <pre class="strategy-preview">{{ strategyPreview }}</pre>
+        </div>
+      </div>
     </section>
 
     <section class="panel" *ngIf="activePanel === 'bot'">

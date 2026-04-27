@@ -7,8 +7,8 @@ import pytest
 from advisor.core.event_bus import EventBus
 from advisor.core import events
 from advisor.core.state import BotLifecycle, Strategy, SymbolState
-from Strategy_model.indicators.signal_store import SignalStore
-from Strategy_model.indicators.strategy import StrategyManager
+from Strategy_model.signals.signal_store import SignalStore
+from Strategy_model.strategy_runner import StrategyManager
 from advisor.Trade.trade_engine import ExecutionProcess
 
 
@@ -81,10 +81,13 @@ class DummyHealthBus:
 
 class DummyStateManager:
     def __init__(self):
-        self.bot = SimpleNamespace(state=SimpleNamespace(value=BotLifecycle.RUNNING))
+        self.bot = SimpleNamespace(state=BotLifecycle.RUNNING)
 
     def set_state(self, state: BotLifecycle):
         self.bot.state = state
+
+    def get_state(self):
+        return self.bot.state
 
 
 class DummyRiskManager:
